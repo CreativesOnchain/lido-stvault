@@ -1,9 +1,10 @@
 # `stvault-receipt`: Lido stVault Consolidation Request Receipt CLI
 
 [![Rust](https://img.shields.io/badge/rust-1.80%2B-orange.svg)](https://www.rust-lang.org)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
+[![CI](https://github.com/CreativesOnchain/lido-stvault/actions/workflows/ci.yml/badge.svg)](https://github.com/CreativesOnchain/lido-stvault/actions/workflows/ci.yml)
 
-A high-assurance, read-only CLI tool that verifies the post-submission status of Lido stVault validator consolidation requests across Ethereum's **Execution Layer (EL)** and **Consensus Layer (CL)** without relying on proprietary indexers, private endpoints, or commercial APIs.
+A high-assurance, read-only CLI tool and Rust library that verifies the post-submission status of Lido stVault validator consolidation requests across Ethereum's **Execution Layer (EL)** and **Consensus Layer (CL)** without relying on proprietary indexers, private endpoints, or commercial APIs.
 
 ---
 
@@ -11,7 +12,7 @@ A high-assurance, read-only CLI tool that verifies the post-submission status of
 
 Under Ethereum's **EIP-7251 (MaxEB)** and **EIP-7002** consolidation mechanisms, validator consolidation requests are initiated on the Execution Layer via the consolidation predeploy contract (`0x0000BBdDc7CE488642fb579F8B00f3a590007251`).
 
-1. **The Cross-Layer Disconnect:** An EL transaction can succeed (status = 1) and consume gas, while the Consensus Layer may silently reject or drop the consolidation request (e.g. invalid withdrawal credentials, queue full, inactive validator).
+1. **The Cross-Layer Disconnect:** An EL transaction can succeed (`status == 1`) and consume gas, while the Consensus Layer may silently reject or drop the consolidation request (e.g. invalid withdrawal credentials, queue full, inactive validator).
 2. **Partial Batch Failures:** In multi-validator consolidation batches, some pairs may succeed while others fail silently or remain queued.
 3. **Hardware Decommissioning Danger:** If node operators assume EL transaction success equals consolidation completion, prematurely shutting down source validator keys can lead to offline penalties or slashing.
 4. **Dangling Fee-Exemption Permissions:** The temporary `NODE_OPERATOR_FEE_EXEMPT_ROLE` in Lido contracts may remain unrevoked after batch consolidation workflows, creating accounting and governance risks.
@@ -85,18 +86,20 @@ cargo build --release
 stvault-receipt [OPTIONS] --manifest <PATH> --el-tx <TX_HASH> --el-rpc <URL> --cl-beacon-api <URL>
 ```
 
-### Options
+### Options Reference
 
-| Flag | Env Var | Description |
-| :--- | :--- | :--- |
-| `-m, --manifest <PATH>` | - | Path to Lido stVault manifest (JSON or YAML) |
-| `-t, --el-tx <TX_HASH>` | - | EL transaction hash (comma-separated or repeated) |
-| `--el-rpc <URL>` | `EL_RPC_URL` | Execution Layer JSON-RPC endpoint |
-| `--cl-beacon-api <URL>` | `CL_BEACON_API_URL` | Consensus Layer Beacon API endpoint |
-| `--st-vault-dashboard <ADDR>` | `ST_VAULT_DASHBOARD` | Lido stVault Dashboard / ACL contract address |
-| `-o, --output-dir <DIR>` | - | Directory to write receipts (default: `./stvault_receipt_output`) |
-| `--format <FORMAT>` | - | Output format: `all`, `markdown`, `json`, `csv` (default: `all`) |
-| `-q, --quiet` | - | Suppress terminal banners and logs |
+| Flag | Env Var | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `-m, --manifest <PATH>` | - | *Required* | Path to Lido stVault manifest (JSON or YAML) |
+| `-t, --el-tx <TX_HASH>` | - | *Required* | EL transaction hash (comma-separated or repeated) |
+| `--el-rpc <URL>` | `EL_RPC_URL` | `http://127.0.0.1:8545` | Execution Layer JSON-RPC endpoint |
+| `--cl-beacon-api <URL>` | `CL_BEACON_API_URL` | `http://127.0.0.1:5052` | Consensus Layer Beacon API endpoint |
+| `--st-vault-dashboard <ADDR>` | `ST_VAULT_DASHBOARD` | - | Lido stVault Dashboard / ACL contract address |
+| `--timeout <SECONDS>` | - | `30` | HTTP request timeout for RPC and Beacon API queries |
+| `-o, --output-dir <DIR>` | - | `./stvault_receipt_output` | Directory to write receipts and evidence |
+| `--format <FORMAT>` | - | `all` | Output format to print to stdout (`all`, `markdown`, `json`, `csv`) |
+| `--generate-completions <SHELL>` | - | - | Generate autocompletions (`bash`, `zsh`, `fish`, `powershell`, `elvish`) |
+| `-q, --quiet` | - | `false` | Suppress interactive banners and informative logs |
 
 ### Example Run
 
@@ -107,8 +110,19 @@ stvault-receipt \
   --el-rpc http://127.0.0.1:8545 \
   --cl-beacon-api http://127.0.0.1:5052 \
   --st-vault-dashboard 0xB9D7934878B5FB9610B3fE8A5e441e8fad7E293f \
+  --timeout 45 \
   --output-dir ./output
 ```
+
+---
+
+## Performance & High-Assurance Architecture
+
+- **Stack-Allocated Hex Validation:** Fixed-size stack array decoding (`[0u8; 48]`) eliminating heap churn on thousands of validator public keys.
+- **Zero-Copy CSV Streaming:** `CsvRow<'a>` serializes directly into byte buffers without per-row dynamic heap allocations.
+- **In-Place Markdown Generation:** Direct formatting via `write!` streaming macros.
+- **Beacon Block Request Deduplication:** Prefetches and caches Beacon blocks once per block timestamp across batch transactions.
+- **Network-Agnostic Dynamic Genesis:** Queries Genesis directly from Beacon API to compute slot timings accurately on any network (Mainnet, Holesky, Sepolia, Ephemery, Hoodi).
 
 ---
 
@@ -136,7 +150,7 @@ Running the tool produces four primary audit artifacts in the output directory:
 1. **`receipt_summary.md`**: Human-readable report with status badges and metrics.
 2. **`receipt.json`**: Full machine-readable receipt for automated CI/CD pipelines.
 3. **`consolidations.csv`**: Tabular CSV breakdown of all source/target indices, tx hashes, and statuses.
-4. **`evidence/verification_metadata.json`**: Raw configuration and execution metadata.
+4. **`evidence/verification_metadata.json`**: Raw configuration, block headers, and execution metadata.
 
 ---
 
@@ -199,10 +213,10 @@ The project includes GitHub Actions workflows:
 ## Running Tests
 
 ```bash
-# Run unit and mock integration tests
+# Run all unit, mock integration, and wiremock tests (39 tests)
 cargo test
 
-# Run tests with stdout output
+# Run tests with live stdout output
 cargo test -- --nocapture
 ```
 
@@ -219,4 +233,4 @@ cargo test -- --nocapture
 
 ## License
 
-Dual-licensed under MIT or Apache-2.0.
+Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE).
