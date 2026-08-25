@@ -4,7 +4,8 @@ use std::process::ExitCode;
 use stvault_receipt::cli::CliArgs;
 use stvault_receipt::terminal;
 use stvault_receipt::{
-    BeaconClient, ElClient, VerificationEngine, generate_and_save_receipts, parse_manifest_file,
+    AppError, BeaconClient, ElClient, VerificationEngine, generate_and_save_receipts,
+    parse_manifest_file,
 };
 
 #[tokio::main]
@@ -17,13 +18,27 @@ async fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    let Some(manifest_path) = args.manifest.as_ref() else {
-        eprintln!(
-            "{} Missing required argument: --manifest <PATH>",
-            "ERROR:".bold().red()
-        );
-        return ExitCode::from(2);
-    };
+    match run(args).await {
+        Ok(all_accepted) => {
+            if all_accepted {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(1)
+            }
+        }
+        Err(e) => {
+            eprintln!("{} {}", "ERROR:".bold().red(), e);
+            ExitCode::from(e.exit_code())
+        }
+    }
+}
+
+/// Executes the cross-layer verification pipeline.
+/// Returns `Ok(true)` if all pairs are accepted, or `Ok(false)` if any require attention.
+async fn run(args: CliArgs) -> Result<bool, AppError> {
+    let manifest_path = args.manifest.as_ref().ok_or_else(|| {
+        AppError::Manifest("Missing required argument: --manifest <PATH>".to_string())
+    })?;
 
     if !args.quiet {
         terminal::print_banner();
@@ -31,13 +46,7 @@ async fn main() -> ExitCode {
     }
 
     // Step 1: Parse Manifest
-    let pairs = match parse_manifest_file(manifest_path) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("{} Failed to parse manifest: {}", "ERROR:".bold().red(), e);
-            return ExitCode::from(e.exit_code());
-        }
-    };
+    let pairs = parse_manifest_file(manifest_path)?;
 
     if !args.quiet {
         terminal::print_connection_info(pairs.len(), &args.el_rpc, &args.cl_beacon_api);
@@ -49,45 +58,23 @@ async fn main() -> ExitCode {
 
     // Step 3: Execute Cross-Layer Verification
     let normalized_txs = args.normalized_el_txs();
-    let receipt = match VerificationEngine::run_verification(
+    let receipt = VerificationEngine::run_verification(
         &pairs,
         &normalized_txs,
         &el_client,
         &beacon_client,
         args.st_vault_dashboard.as_deref(),
     )
-    .await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("{} Verification failed: {}", "ERROR:".bold().red(), e);
-            return ExitCode::from(e.exit_code());
-        }
-    };
+    .await?;
 
     // Step 4: Generate and Save Artifacts (Markdown, JSON, CSV, Evidence)
-    let artifacts = match generate_and_save_receipts(&args.output_dir, &receipt) {
-        Ok(bundle) => {
-            if !args.quiet {
-                println!(
-                    "💾 Receipts saved to directory: {}",
-                    args.output_dir.display()
-                );
-            }
-            bundle
-        }
-        Err(e) => {
-            eprintln!(
-                "{} Failed to generate or save receipt artifacts: {}",
-                "WARNING:".bold().yellow(),
-                e
-            );
-            return ExitCode::from(1);
-        }
-    };
+    let artifacts = generate_and_save_receipts(&args.output_dir, &receipt)?;
 
-    // Step 5: Terminal Output Presentation
     if !args.quiet {
+        println!(
+            "💾 Receipts saved to directory: {}",
+            args.output_dir.display()
+        );
         terminal::print_verification_results(&receipt);
     }
 
@@ -99,10 +86,5 @@ async fn main() -> ExitCode {
         &artifacts.csv,
     );
 
-    // Exit Code: 0 if all accepted, 1 if any not accepted / indeterminate
-    if receipt.summary.is_all_accepted() {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::from(1)
-    }
+    Ok(receipt.summary.is_all_accepted())
 }
