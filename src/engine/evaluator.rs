@@ -1,5 +1,5 @@
-use crate::cl::{verify_consensus_layer, BeaconClient};
-use crate::el::{verify_execution_layer, ElClient};
+use crate::cl::{BeaconClient, verify_consensus_layer};
+use crate::el::{ElClient, verify_execution_layer};
 use crate::error::Result;
 use crate::lido::LidoRoleInspector;
 use crate::models::{

@@ -7,8 +7,8 @@ use std::process::ExitCode;
 use stvault_receipt::cli::{CliArgs, OutputFormat};
 use stvault_receipt::models::ConsolidationStatus;
 use stvault_receipt::{
-    generate_csv_receipt, generate_json_receipt, generate_markdown_receipt, parse_manifest_file,
-    BeaconClient, ElClient, EvidenceWriter, VerificationEngine,
+    BeaconClient, ElClient, EvidenceWriter, VerificationEngine, generate_csv_receipt,
+    generate_json_receipt, generate_markdown_receipt, parse_manifest_file,
 };
 
 #[tokio::main]
@@ -199,15 +199,13 @@ async fn main() -> ExitCode {
             receipt.summary.indeterminate.to_string().magenta(),
         );
 
-        if let Some(active) = receipt.fee_exemption.role_active {
-            if active {
-                println!(
-                    "\n{}",
-                    "⚠️  WARNING: NODE_OPERATOR_FEE_EXEMPT_ROLE is currently ACTIVE on stVault Dashboard."
-                        .bold()
-                        .yellow()
-                );
-            }
+        if let Some(true) = receipt.fee_exemption.role_active {
+            println!(
+                "\n{}",
+                "⚠️  WARNING: NODE_OPERATOR_FEE_EXEMPT_ROLE is currently ACTIVE on stVault Dashboard."
+                    .bold()
+                    .yellow()
+            );
         }
     }
 

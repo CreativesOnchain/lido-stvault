@@ -65,10 +65,10 @@ pub async fn verify_execution_layer(
 
         // Check if "to" is Predeploy directly or if calldata / logs contain interaction
         let mut predeploy_interaction = false;
-        if let Some(ref to) = receipt.to {
-            if ConsolidationPredeploy::is_predeploy_address(to) {
-                predeploy_interaction = true;
-            }
+        if let Some(ref to) = receipt.to
+            && ConsolidationPredeploy::is_predeploy_address(to)
+        {
+            predeploy_interaction = true;
         }
 
         // Check logs for predeploy address
@@ -108,13 +108,12 @@ pub async fn verify_execution_layer(
 
         // If no direct calldata match was found (e.g. nested contract calls),
         // but tx succeeded and manifest has exactly 1 pair per tx, associate cautiously
-        if matched_pairs.is_empty() && manifest_pairs.len() == tx_hashes.len() {
-            // Pair 1-to-1 association fallback
-            if let Some(idx) = tx_hashes.iter().position(|h| h == tx_hash) {
-                if let Some(pair) = manifest_pairs.get(idx) {
-                    matched_pairs.push(pair.clone());
-                }
-            }
+        if matched_pairs.is_empty()
+            && manifest_pairs.len() == tx_hashes.len()
+            && let Some(idx) = tx_hashes.iter().position(|h| h == tx_hash)
+            && let Some(pair) = manifest_pairs.get(idx)
+        {
+            matched_pairs.push(pair.clone());
         }
 
         for pair in &matched_pairs {

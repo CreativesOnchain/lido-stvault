@@ -18,5 +18,5 @@ pub use models::{
     ConsolidationPair, ConsolidationStatus, PairVerificationResult, VerificationReceipt,
 };
 pub use receipt::{
-    generate_csv_receipt, generate_json_receipt, generate_markdown_receipt, EvidenceWriter,
+    EvidenceWriter, generate_csv_receipt, generate_json_receipt, generate_markdown_receipt,
 };

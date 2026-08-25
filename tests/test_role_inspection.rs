@@ -1,6 +1,6 @@
 use serde_json::json;
-use stvault_receipt::lido::{node_operator_fee_exempt_role_hash, LidoRoleInspector};
 use stvault_receipt::ElClient;
+use stvault_receipt::lido::{LidoRoleInspector, node_operator_fee_exempt_role_hash};
 use wiremock::matchers::method;
 use wiremock::{Mock, MockServer, ResponseTemplate};
 

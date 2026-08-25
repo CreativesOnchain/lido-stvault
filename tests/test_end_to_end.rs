@@ -1,8 +1,8 @@
 use serde_json::json;
 use stvault_receipt::models::ConsolidationStatus;
 use stvault_receipt::{
-    generate_csv_receipt, generate_json_receipt, generate_markdown_receipt, parse_manifest_str,
-    BeaconClient, ElClient, EvidenceWriter, VerificationEngine,
+    BeaconClient, ElClient, EvidenceWriter, VerificationEngine, generate_csv_receipt,
+    generate_json_receipt, generate_markdown_receipt, parse_manifest_str,
 };
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -143,10 +143,12 @@ async fn test_end_to_end_accepted_workflow() {
     assert!(temp_dir.path().join("receipt_summary.md").exists());
     assert!(temp_dir.path().join("receipt.json").exists());
     assert!(temp_dir.path().join("consolidations.csv").exists());
-    assert!(temp_dir
-        .path()
-        .join("evidence/verification_metadata.json")
-        .exists());
+    assert!(
+        temp_dir
+            .path()
+            .join("evidence/verification_metadata.json")
+            .exists()
+    );
 }
 
 #[tokio::test]

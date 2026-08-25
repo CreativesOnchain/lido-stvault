@@ -93,34 +93,34 @@ pub async fn verify_consensus_layer(
                     client.get_beacon_block(&estimated_slot.to_string()).await
                 {
                     // Check execution_requests
-                    if let Some(ref requests) = block_resp.data.message.body.execution_requests {
-                        if let Some(ref consolidations) = requests.consolidations {
-                            for req in consolidations {
-                                let match_pubkeys =
-                                    req.source_pubkey.as_deref().map(|s| s.to_lowercase())
-                                        == Some(pair.source_pubkey.to_lowercase())
-                                        && req.target_pubkey.as_deref().map(|s| s.to_lowercase())
-                                            == Some(pair.target_pubkey.to_lowercase());
+                    if let Some(ref requests) = block_resp.data.message.body.execution_requests
+                        && let Some(ref consolidations) = requests.consolidations
+                    {
+                        for req in consolidations {
+                            let match_pubkeys =
+                                req.source_pubkey.as_deref().map(|s| s.to_lowercase())
+                                    == Some(pair.source_pubkey.to_lowercase())
+                                    && req.target_pubkey.as_deref().map(|s| s.to_lowercase())
+                                        == Some(pair.target_pubkey.to_lowercase());
 
-                                let match_indices =
-                                    if let (Some(s_idx), Some(t_idx)) = (src_idx, tgt_idx) {
-                                        req.source_index
+                            let match_indices =
+                                if let (Some(s_idx), Some(t_idx)) = (src_idx, tgt_idx) {
+                                    req.source_index
+                                        .as_deref()
+                                        .and_then(|s| s.parse::<u64>().ok())
+                                        == Some(s_idx)
+                                        && req
+                                            .target_index
                                             .as_deref()
                                             .and_then(|s| s.parse::<u64>().ok())
-                                            == Some(s_idx)
-                                            && req
-                                                .target_index
-                                                .as_deref()
-                                                .and_then(|s| s.parse::<u64>().ok())
-                                                == Some(t_idx)
-                                    } else {
-                                        false
-                                    };
+                                            == Some(t_idx)
+                                } else {
+                                    false
+                                };
 
-                                if match_pubkeys || match_indices {
-                                    beacon_request_found = true;
-                                    break;
-                                }
+                            if match_pubkeys || match_indices {
+                                beacon_request_found = true;
+                                break;
                             }
                         }
                     }

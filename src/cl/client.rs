@@ -68,18 +68,17 @@ impl BeaconClient {
         let mut map = HashMap::new();
 
         let post_res = self.http.post(&post_url).json(&payload).send().await;
-        if let Ok(resp) = post_res {
-            if resp.status().is_success() {
-                if let Ok(parsed) = resp.json::<ValidatorsResponse>().await {
-                    for item in parsed.data {
-                        if let Ok(idx) = item.index.parse::<u64>() {
-                            let pubkey_norm = item.validator.pubkey.to_lowercase();
-                            map.insert(pubkey_norm, idx);
-                        }
-                    }
-                    return Ok(map);
+        if let Ok(resp) = post_res
+            && resp.status().is_success()
+            && let Ok(parsed) = resp.json::<ValidatorsResponse>().await
+        {
+            for item in parsed.data {
+                if let Ok(idx) = item.index.parse::<u64>() {
+                    let pubkey_norm = item.validator.pubkey.to_lowercase();
+                    map.insert(pubkey_norm, idx);
                 }
             }
+            return Ok(map);
         }
 
         // Fallback: Query GET with query parameter id=pubkey1,pubkey2...
