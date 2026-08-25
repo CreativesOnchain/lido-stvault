@@ -48,7 +48,8 @@ pub async fn verify_consensus_layer(
         .unwrap_or_default();
 
     // Step 5: Pre-fetch and cache beacon blocks for all distinct timestamps if genesis is known
-    let beacon_blocks = if let Some(genesis) = genesis_time {
+    let beacon_blocks =
+        if let Some(genesis) = genesis_time {
         fetch_beacon_blocks_for_timestamps(client, el_block_timestamps.values().copied(), genesis)
             .await
     } else {
@@ -56,7 +57,8 @@ pub async fn verify_consensus_layer(
     };
 
     // Step 6: Evaluate evidence for each pair
-    let mut pair_evidence = HashMap::with_capacity(pairs.len());
+    let mut pair_evidence =
+        HashMap::with_capacity(pairs.len());
 
     for pair in pairs {
         let src_idx = validator_indices
