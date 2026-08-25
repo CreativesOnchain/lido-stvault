@@ -1,0 +1,15 @@
+services:
+  stvault-receipt:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: lidofinance/stvault-receipt:latest
+    environment:
+      - EL_RPC_URL=${EL_RPC_URL:-http://host.docker.internal:8545}
+      - CL_BEACON_API_URL=${CL_BEACON_API_URL:-http://host.docker.internal:5052}
+      - ST_VAULT_DASHBOARD=${ST_VAULT_DASHBOARD:-}
+    volumes:
+      - ./tests/fixtures/manifests:/data/manifests:ro
+      - ./stvault_receipt_output:/data/output
+    network_mode: host
+    command: ["--help"]

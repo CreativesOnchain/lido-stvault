@@ -1,0 +1,52 @@
+﻿stVault Consolidation Request Receipt
+Brief Project Details
+Project: stVault Consolidation Request Receipt
+Purpose: Build a read-only CLI that verifies the post-submission status of Lido stVault validator consolidation requests across Ethereum’s execution and consensus layers.
+Problem
+Lido’s current stVault consolidation workflow can produce a successful execution-layer transaction even when the corresponding consolidation request is not accepted by the consensus layer.
+For multi-validator or non-batched operations, some requests may succeed while others remain queued, fail consensus checks, or are never submitted. The related fee-exemption operation may also be separate, and the temporary NODE_OPERATOR_FEE_EXEMPT_ROLE may remain active after the workflow.
+Operators currently need to check these results manually.
+Proposed Solution
+The tool will accept:
+* The consolidation manifest used by the official Lido stVault CLI.
+* The relevant execution transaction hashes.
+* An execution-layer RPC endpoint.
+* A consensus-layer Beacon API endpoint.
+* The stVault Dashboard address.
+For every source→target validator pair, it will report:
+* Whether the consolidation request entered the execution-layer queue.
+* Whether the request later appeared in a beacon block.
+* Whether the exact source→target validator-index pair was newly accepted into the consensus-layer pending_consolidations state.
+* Whether the request remains queued, was not accepted, or cannot be verified.
+* Whether the related fee-exemption operation was observed.
+* Whether the temporary fee-exemption role remains active.
+Outputs
+The CLI will generate:
+* A concise Markdown summary.
+* A machine-readable JSON receipt.
+* A CSV containing pair-by-pair results.
+* Raw evidence files containing transaction receipts, beacon block data and consensus-state results.
+Safety and Scope Boundaries
+The tool will be read-only and will not:
+* Submit consolidation requests.
+* Revoke roles automatically.
+* Decide which validators should be consolidated.
+* Certify fee-accounting correctness.
+* Confirm that the validator balance transfer has completed.
+* Describe a consolidation, stVault or migration as safe or secure.
+Missing or conflicting evidence must return INDETERMINATE rather than a successful result.
+Very Concise MVP Plan
+MVP Goal
+Prove that one official-format Hoodi consolidation request can be followed from execution-layer submission to exact consensus-layer acceptance.
+MVP Tasks
+1. Parse the official Lido source→target consolidation manifest.
+2. Fetch the execution transaction and confirm matching consolidation-predeploy evidence.
+3. Map the source and target validator public keys to validator indices.
+4. Locate the exact request in a subsequent beacon block.
+5. Compare the parent and post-state pending_consolidations lists.
+6. Confirm whether the exact pair was newly accepted.
+7. Read the current NODE_OPERATOR_FEE_EXEMPT_ROLE state.
+8. Generate a minimal Markdown and JSON receipt.
+9. Add one negative fixture and one unsupported-endpoint case returning INDETERMINATE.
+MVP Success Condition
+The prototype is valid only if exact consensus acceptance can be reproduced using standard execution and Beacon APIs without relying on a paid explorer, proprietary indexer or private Lido endpoint.

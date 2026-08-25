@@ -1,0 +1,5 @@
+target/
+.git/
+.github/
+stvault_receipt_output/
+*.log

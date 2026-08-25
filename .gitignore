@@ -1,0 +1,6 @@
+/target
+stvault_receipt_output/
+output/
+*.log
+.DS_Store
+.idea/
