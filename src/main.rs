@@ -57,7 +57,7 @@ async fn main() -> ExitCode {
         Ok(p) => p,
         Err(e) => {
             eprintln!("{} Failed to parse manifest: {}", "ERROR:".bold().red(), e);
-            return ExitCode::from(2);
+            return ExitCode::from(e.exit_code());
         }
     };
 
@@ -92,7 +92,7 @@ async fn main() -> ExitCode {
         Ok(r) => r,
         Err(e) => {
             eprintln!("{} Verification failed: {}", "ERROR:".bold().red(), e);
-            return ExitCode::from(1);
+            return ExitCode::from(e.exit_code());
         }
     };
 
