@@ -1,4 +1,6 @@
+use crate::ConsolidationPair;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenesisData {
@@ -89,4 +91,23 @@ pub struct BeaconBlockData {
 pub struct BeaconBlockResponse {
     pub data: BeaconBlockData,
     pub version: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClVerifiedPairEvidence {
+    pub source_pubkey: String,
+    pub source_index: Option<u64>,
+    pub target_pubkey: String,
+    pub target_index: Option<u64>,
+    pub beacon_slot: Option<u64>,
+    pub beacon_request_found: bool,
+    pub cl_pending_found: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClVerificationEvidence {
+    pub validator_indices: HashMap<String, u64>,
+    pub pair_evidence: HashMap<ConsolidationPair, ClVerifiedPairEvidence>,
+    pub pending_consolidations_queue: Vec<PendingConsolidationItem>,
+    pub beacon_blocks: HashMap<u64, BeaconBlockResponse>,
 }

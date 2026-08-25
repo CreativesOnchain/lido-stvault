@@ -1,65 +1,66 @@
 use super::client::BeaconClient;
-use super::types::{BeaconBlockResponse, PendingConsolidationItem};
+use super::types::{
+    BeaconBlockResponse, ClVerificationEvidence, ClVerifiedPairEvidence, ConsolidationRequestItem,
+    PendingConsolidationItem,
+};
 use crate::error::Result;
 use crate::models::ConsolidationPair;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ClVerifiedPairEvidence {
-    pub source_pubkey: String,
-    pub source_index: Option<u64>,
-    pub target_pubkey: String,
-    pub target_index: Option<u64>,
-    pub beacon_slot: Option<u64>,
-    pub beacon_request_found: bool,
-    pub cl_pending_found: bool,
-}
+/// Default Ethereum slot duration in seconds (post-Merge / PoS).
+pub const SECONDS_PER_SLOT: u64 = 12;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ClVerificationEvidence {
-    pub validator_indices: HashMap<String, u64>,
-    pub pair_evidence: HashMap<ConsolidationPair, ClVerifiedPairEvidence>,
-    pub pending_consolidations_queue: Vec<PendingConsolidationItem>,
-    pub beacon_blocks: HashMap<u64, BeaconBlockResponse>,
-}
+/// Default Ethereum Mainnet beacon genesis timestamp (Dec 1, 2020 12:00:23 UTC).
+pub const DEFAULT_MAINNET_GENESIS_TIME: u64 = 1606824023;
 
+/// Verifies validator consolidation state across the Consensus Layer (Beacon API).
 pub async fn verify_consensus_layer(
     client: &BeaconClient,
     pairs: &[ConsolidationPair],
     el_block_timestamps: &HashMap<u64, u64>,
 ) -> Result<ClVerificationEvidence> {
-    // 1. Gather all unique pubkeys
-    let mut all_pubkeys = Vec::new();
-    for pair in pairs {
-        if !all_pubkeys.contains(&pair.source_pubkey) {
-            all_pubkeys.push(pair.source_pubkey.clone());
-        }
-        if !all_pubkeys.contains(&pair.target_pubkey) {
-            all_pubkeys.push(pair.target_pubkey.clone());
-        }
+    if pairs.is_empty() {
+        return Ok(ClVerificationEvidence {
+            validator_indices: HashMap::new(),
+            pair_evidence: HashMap::new(),
+            pending_consolidations_queue: Vec::new(),
+            beacon_blocks: HashMap::new(),
+        });
     }
 
-    // 2. Fetch validator indices
+    // Step 1: Collect unique public keys in O(N) using pre-allocated HashSet
+    let all_pubkeys = collect_unique_pubkeys(pairs);
+
+    // Step 2: Fetch validator indices for all pubkeys in batch
     let validator_indices = client
         .get_validators_by_pubkeys(&all_pubkeys)
         .await
         .unwrap_or_default();
 
-    // 3. Fetch Genesis to calculate slot from timestamp
-    let genesis_res = client.get_genesis().await.ok();
-    let genesis_time = genesis_res
+    // Step 3: Fetch Genesis to calculate slot from timestamp
+    let genesis_time = client
+        .get_genesis()
+        .await
+        .ok()
         .and_then(|g| g.data.genesis_time.parse::<u64>().ok())
-        .unwrap_or(1606824023); // fallback mainnet genesis if unreachable
+        .unwrap_or(DEFAULT_MAINNET_GENESIS_TIME);
 
-    // 4. Fetch pending_consolidations from Beacon head state
+    // Step 4: Fetch pending_consolidations from Beacon head state
     let pending_consolidations = client
         .get_pending_consolidations("head")
         .await
         .unwrap_or_default();
 
-    let mut beacon_blocks = HashMap::new();
-    let mut pair_evidence = HashMap::new();
+    // Step 5: Pre-fetch and cache beacon blocks for all distinct timestamps (avoids duplicate network queries)
+    let beacon_blocks = fetch_beacon_blocks_for_timestamps(
+        client,
+        el_block_timestamps.values().copied(),
+        genesis_time,
+    )
+    .await;
+
+    // Step 6: Evaluate evidence for each pair
+    let mut pair_evidence = HashMap::with_capacity(pairs.len());
 
     for pair in pairs {
         let src_idx = validator_indices
@@ -69,65 +70,11 @@ pub async fn verify_consensus_layer(
             .get(&pair.target_pubkey.to_lowercase())
             .copied();
 
-        // Check pending_consolidations queue
-        let mut cl_pending_found = false;
-        if let (Some(s_idx), Some(t_idx)) = (src_idx, tgt_idx) {
-            cl_pending_found = pending_consolidations.iter().any(|item| {
-                item.source_index.parse::<u64>().ok() == Some(s_idx)
-                    && item.target_index.parse::<u64>().ok() == Some(t_idx)
-            });
-        }
+        let cl_pending_found = is_pair_pending(&pending_consolidations, src_idx, tgt_idx);
 
-        // Try locating beacon block containing the request
-        let mut beacon_slot = None;
-        let mut beacon_request_found = false;
-
-        // If we have EL block timestamps, calculate estimated slot: (timestamp - genesis_time) / 12
-        for &timestamp in el_block_timestamps.values() {
-            if timestamp >= genesis_time {
-                let estimated_slot = (timestamp - genesis_time) / 12;
-                beacon_slot = Some(estimated_slot);
-
-                // Fetch beacon block around that slot
-                if let Ok(Some(block_resp)) =
-                    client.get_beacon_block(&estimated_slot.to_string()).await
-                {
-                    // Check execution_requests
-                    if let Some(ref requests) = block_resp.data.message.body.execution_requests
-                        && let Some(ref consolidations) = requests.consolidations
-                    {
-                        for req in consolidations {
-                            let match_pubkeys =
-                                req.source_pubkey.as_deref().map(|s| s.to_lowercase())
-                                    == Some(pair.source_pubkey.to_lowercase())
-                                    && req.target_pubkey.as_deref().map(|s| s.to_lowercase())
-                                        == Some(pair.target_pubkey.to_lowercase());
-
-                            let match_indices =
-                                if let (Some(s_idx), Some(t_idx)) = (src_idx, tgt_idx) {
-                                    req.source_index
-                                        .as_deref()
-                                        .and_then(|s| s.parse::<u64>().ok())
-                                        == Some(s_idx)
-                                        && req
-                                            .target_index
-                                            .as_deref()
-                                            .and_then(|s| s.parse::<u64>().ok())
-                                            == Some(t_idx)
-                                } else {
-                                    false
-                                };
-
-                            if match_pubkeys || match_indices {
-                                beacon_request_found = true;
-                                break;
-                            }
-                        }
-                    }
-                    beacon_blocks.insert(estimated_slot, block_resp);
-                }
-            }
-        }
+        // Check if any fetched beacon block contains this consolidation request
+        let (beacon_slot, beacon_request_found) =
+            scan_beacon_blocks(&beacon_blocks, pair, src_idx, tgt_idx);
 
         pair_evidence.insert(
             pair.clone(),
@@ -149,4 +96,138 @@ pub async fn verify_consensus_layer(
         pending_consolidations_queue: pending_consolidations,
         beacon_blocks,
     })
+}
+
+// -----------------------------------------------------------------------------
+// Helper Functions
+// -----------------------------------------------------------------------------
+
+/// Extracts unique 0x-prefixed public keys from consolidation pairs in $O(N)$ time.
+fn collect_unique_pubkeys(pairs: &[ConsolidationPair]) -> Vec<String> {
+    let mut set = HashSet::with_capacity(pairs.len() * 2);
+    for pair in pairs {
+        set.insert(pair.source_pubkey.clone());
+        set.insert(pair.target_pubkey.clone());
+    }
+    set.into_iter().collect()
+}
+
+/// Converts an Execution Layer block timestamp to an estimated Consensus Layer slot.
+pub fn timestamp_to_slot(timestamp: u64, genesis_time: u64) -> Option<u64> {
+    if timestamp >= genesis_time {
+        Some((timestamp - genesis_time) / SECONDS_PER_SLOT)
+    } else {
+        None
+    }
+}
+
+/// Pre-fetches Beacon blocks for distinct timestamps to avoid duplicate queries.
+async fn fetch_beacon_blocks_for_timestamps(
+    client: &BeaconClient,
+    timestamps: impl Iterator<Item = u64>,
+    genesis_time: u64,
+) -> HashMap<u64, BeaconBlockResponse> {
+    let mut blocks = HashMap::new();
+    let distinct_slots: HashSet<u64> = timestamps
+        .filter_map(|ts| timestamp_to_slot(ts, genesis_time))
+        .collect();
+
+    for slot in distinct_slots {
+        if let Ok(Some(block_resp)) = client.get_beacon_block(&slot.to_string()).await {
+            blocks.insert(slot, block_resp);
+        }
+    }
+    blocks
+}
+
+/// Checks if a validator pair is currently queued in `pending_consolidations`.
+fn is_pair_pending(
+    pending: &[PendingConsolidationItem],
+    src_idx: Option<u64>,
+    tgt_idx: Option<u64>,
+) -> bool {
+    match (src_idx, tgt_idx) {
+        (Some(s), Some(t)) => pending.iter().any(|item| {
+            item.source_index.parse::<u64>().ok() == Some(s)
+                && item.target_index.parse::<u64>().ok() == Some(t)
+        }),
+        _ => false,
+    }
+}
+
+/// Scans pre-fetched beacon blocks to determine if a consolidation request was included.
+fn scan_beacon_blocks(
+    blocks: &HashMap<u64, BeaconBlockResponse>,
+    pair: &ConsolidationPair,
+    src_idx: Option<u64>,
+    tgt_idx: Option<u64>,
+) -> (Option<u64>, bool) {
+    for (&slot, block_resp) in blocks {
+        if let Some(ref requests) = block_resp.data.message.body.execution_requests
+            && let Some(ref consolidations) = requests.consolidations
+        {
+            for req in consolidations {
+                if matches_consolidation_request(req, pair, src_idx, tgt_idx) {
+                    return (Some(slot), true);
+                }
+            }
+        }
+    }
+
+    // Return the first estimated slot if available, even if request wasn't found in body
+    let first_slot = blocks.keys().copied().next();
+    (first_slot, false)
+}
+
+/// Checks if an execution request matches a given consolidation pair (by pubkey or index).
+fn matches_consolidation_request(
+    req: &ConsolidationRequestItem,
+    pair: &ConsolidationPair,
+    src_idx: Option<u64>,
+    tgt_idx: Option<u64>,
+) -> bool {
+    let match_pubkeys = req.source_pubkey.as_deref().map(|s| s.to_lowercase())
+        == Some(pair.source_pubkey.to_lowercase())
+        && req.target_pubkey.as_deref().map(|s| s.to_lowercase())
+            == Some(pair.target_pubkey.to_lowercase());
+
+    let match_indices = match (src_idx, tgt_idx) {
+        (Some(s_idx), Some(t_idx)) => {
+            req.source_index
+                .as_deref()
+                .and_then(|s| s.parse::<u64>().ok())
+                == Some(s_idx)
+                && req
+                    .target_index
+                    .as_deref()
+                    .and_then(|s| s.parse::<u64>().ok())
+                    == Some(t_idx)
+        }
+        _ => false,
+    };
+
+    match_pubkeys || match_indices
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_timestamp_to_slot() {
+        let genesis = 1606824023;
+        let slot = timestamp_to_slot(genesis + 24, genesis);
+        assert_eq!(slot, Some(2));
+    }
+
+    #[test]
+    fn test_is_pair_pending() {
+        let pending = vec![PendingConsolidationItem {
+            source_index: "100".to_string(),
+            target_index: "200".to_string(),
+        }];
+        assert!(is_pair_pending(&pending, Some(100), Some(200)));
+        assert!(!is_pair_pending(&pending, Some(100), Some(300)));
+        assert!(!is_pair_pending(&pending, None, Some(200)));
+    }
 }
