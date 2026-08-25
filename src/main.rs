@@ -79,9 +79,10 @@ async fn main() -> ExitCode {
         println!("🔍 Running cross-layer verification...");
     }
 
+    let normalized_txs = args.normalized_el_txs();
     let receipt = match VerificationEngine::run_verification(
         &pairs,
-        &args.el_txs,
+        &normalized_txs,
         &el_client,
         &beacon_client,
         args.st_vault_dashboard.as_deref(),

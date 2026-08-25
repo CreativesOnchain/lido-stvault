@@ -1,5 +1,7 @@
 use clap::{CommandFactory, Parser, ValueEnum};
 use clap_complete::Shell;
+use std::fmt;
+use std::io;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -8,6 +10,17 @@ pub enum OutputFormat {
     Markdown,
     Json,
     Csv,
+}
+
+impl fmt::Display for OutputFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::All => write!(f, "all"),
+            Self::Markdown => write!(f, "markdown"),
+            Self::Json => write!(f, "json"),
+            Self::Csv => write!(f, "csv"),
+        }
+    }
 }
 
 #[derive(Parser, Debug)]
@@ -83,9 +96,72 @@ pub struct CliArgs {
 }
 
 impl CliArgs {
-    /// Helper to print shell autocompletions directly to standard output.
-    pub fn print_completions(shell: Shell) {
+    /// Returns trimmed and normalized transaction hashes.
+    pub fn normalized_el_txs(&self) -> Vec<String> {
+        self.el_txs
+            .iter()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(|s| {
+                if s.starts_with("0x") || s.starts_with("0X") {
+                    s.to_lowercase()
+                } else {
+                    format!("0x{}", s.to_lowercase())
+                }
+            })
+            .collect()
+    }
+
+    /// Generates shell completion script into the provided writer.
+    pub fn generate_completions_to<W: io::Write>(shell: Shell, buf: &mut W) {
         let mut cmd = Self::command();
-        clap_complete::generate(shell, &mut cmd, "stvault-receipt", &mut std::io::stdout());
+        clap_complete::generate(shell, &mut cmd, "stvault-receipt", buf);
+    }
+
+    /// Prints shell autocompletions directly to standard output.
+    pub fn print_completions(shell: Shell) {
+        Self::generate_completions_to(shell, &mut io::stdout());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cli_parsing_defaults() {
+        let args = CliArgs::parse_from([
+            "stvault-receipt",
+            "--manifest",
+            "manifest.json",
+            "-t",
+            "0x1234,0x5678",
+        ]);
+
+        assert_eq!(args.manifest, Some(PathBuf::from("manifest.json")));
+        assert_eq!(args.el_txs, vec!["0x1234", "0x5678"]);
+        assert_eq!(args.normalized_el_txs(), vec!["0x1234", "0x5678"]);
+        assert_eq!(args.format, OutputFormat::All);
+        assert!(!args.quiet);
+    }
+
+    #[test]
+    fn test_normalized_el_txs_adds_prefix() {
+        let args = CliArgs::parse_from([
+            "stvault-receipt",
+            "--manifest",
+            "manifest.json",
+            "-t",
+            "abcdef",
+        ]);
+        assert_eq!(args.normalized_el_txs(), vec!["0xabcdef"]);
+    }
+
+    #[test]
+    fn test_generate_completions_output() {
+        let mut buf = Vec::new();
+        CliArgs::generate_completions_to(Shell::Bash, &mut buf);
+        let script = String::from_utf8(buf).expect("completion script not utf8");
+        assert!(script.contains("stvault-receipt"));
     }
 }
