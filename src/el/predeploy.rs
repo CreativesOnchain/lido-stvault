@@ -3,54 +3,113 @@ use crate::models::ConsolidationPair;
 /// EIP-7251 Consolidation Request Predeploy contract address on Ethereum.
 pub const CONSOLIDATION_PREDEPLOY_ADDRESS: &str = "0x0000bbddc7ce488642fb579f8b00f3a590007251";
 
+/// Length of a BLS12-381 public key in bytes.
+pub const PUBKEY_BYTE_LEN: usize = 48;
+
+/// Expected calldata length for a direct consolidation request (source + target).
+pub const PREDEPLOY_CALLDATA_LEN: usize = PUBKEY_BYTE_LEN * 2; // 96 bytes
+
 pub struct ConsolidationPredeploy;
 
 impl ConsolidationPredeploy {
-    /// Checks if a contract address matches the EIP-7251 consolidation predeploy.
+    /// Checks if an address matches the EIP-7251 consolidation predeploy address (zero-allocation).
     pub fn is_predeploy_address(address: &str) -> bool {
-        let normalized = address.to_lowercase();
-        normalized == CONSOLIDATION_PREDEPLOY_ADDRESS
-            || normalized.ends_with("0000bbddc7ce488642fb579f8b00f3a590007251")
+        let clean = address
+            .trim()
+            .trim_start_matches("0x")
+            .trim_start_matches("0X");
+
+        clean.eq_ignore_ascii_case("0000bbddc7ce488642fb579f8b00f3a590007251")
     }
 
     /// Decodes a 96-byte direct calldata payload sent to the EIP-7251 consolidation predeploy.
     /// Format: `source_pubkey` (48 bytes) ++ `target_pubkey` (48 bytes).
     pub fn decode_predeploy_calldata(data: &[u8]) -> Option<ConsolidationPair> {
-        if data.len() == 96 {
-            let source_bytes = &data[0..48];
-            let target_bytes = &data[48..96];
-            Some(ConsolidationPair::new(
-                format!("0x{}", hex::encode(source_bytes)),
-                format!("0x{}", hex::encode(target_bytes)),
-            ))
-        } else {
-            None
+        if data.len() != PREDEPLOY_CALLDATA_LEN {
+            return None;
         }
+
+        let source_bytes = &data[0..PUBKEY_BYTE_LEN];
+        let target_bytes = &data[PUBKEY_BYTE_LEN..PREDEPLOY_CALLDATA_LEN];
+
+        Some(ConsolidationPair::new(
+            format!("0x{}", hex::encode(source_bytes)),
+            format!("0x{}", hex::encode(target_bytes)),
+        ))
     }
 
-    /// Scans arbitrary calldata (e.g. batch consolidation transactions or multicalls)
-    /// for known manifest source->target pubkey byte sequences.
+    /// Scans arbitrary calldata (e.g. batch transactions, multicalls, or aggregator wrappers)
+    /// for known manifest source->target pubkey byte sequences using fast byte-slice scanning.
     pub fn match_pairs_in_calldata(
         calldata: &[u8],
         manifest_pairs: &[ConsolidationPair],
     ) -> Vec<ConsolidationPair> {
-        let mut matched = Vec::new();
-        let calldata_hex = hex::encode(calldata).to_lowercase();
+        if calldata.len() < PUBKEY_BYTE_LEN {
+            return Vec::new();
+        }
+
+        let mut matched = Vec::with_capacity(manifest_pairs.len());
 
         for pair in manifest_pairs {
-            let src_clean = pair.source_pubkey.trim_start_matches("0x").to_lowercase();
-            let tgt_clean = pair.target_pubkey.trim_start_matches("0x").to_lowercase();
-
-            // Check if both pubkeys appear in sequence or independently in the calldata
-            let combined_sequence = format!("{}{}", src_clean, tgt_clean);
-            if calldata_hex.contains(&combined_sequence)
-                || (calldata_hex.contains(&src_clean) && calldata_hex.contains(&tgt_clean))
-            {
+            if pair_appears_in_bytes(calldata, pair) {
                 matched.push(pair.clone());
             }
         }
+
         matched
     }
+}
+
+// -----------------------------------------------------------------------------
+// Helper Functions
+// -----------------------------------------------------------------------------
+
+/// Checks if a pair's source and target pubkeys appear in the raw calldata bytes.
+fn pair_appears_in_bytes(calldata: &[u8], pair: &ConsolidationPair) -> bool {
+    let src_clean = pair
+        .source_pubkey
+        .trim_start_matches("0x")
+        .trim_start_matches("0X");
+    let tgt_clean = pair
+        .target_pubkey
+        .trim_start_matches("0x")
+        .trim_start_matches("0X");
+
+    let Ok(src_bytes) = hex::decode(src_clean) else {
+        return false;
+    };
+    let Ok(tgt_bytes) = hex::decode(tgt_clean) else {
+        return false;
+    };
+
+    if src_bytes.len() != PUBKEY_BYTE_LEN || tgt_bytes.len() != PUBKEY_BYTE_LEN {
+        return false;
+    }
+
+    // 1. Check for exact consecutive 96-byte sequence (source ++ target)
+    let mut combined = [0u8; PREDEPLOY_CALLDATA_LEN];
+    combined[..PUBKEY_BYTE_LEN].copy_from_slice(&src_bytes);
+    combined[PUBKEY_BYTE_LEN..].copy_from_slice(&tgt_bytes);
+
+    if contains_subslice(calldata, &combined) {
+        return true;
+    }
+
+    // 2. Check if both pubkeys appear independently within the calldata
+    contains_subslice(calldata, &src_bytes) && contains_subslice(calldata, &tgt_bytes)
+}
+
+/// Fast search for a needle subslice inside haystack bytes.
+fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    if haystack.len() < needle.len() {
+        return false;
+    }
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle)
 }
 
 #[cfg(test)]
@@ -59,7 +118,7 @@ mod tests {
 
     #[test]
     fn test_decode_predeploy_calldata() {
-        let mut data = vec![0u8; 96];
+        let mut data = vec![0u8; PREDEPLOY_CALLDATA_LEN];
         data[0] = 0x8a;
         data[48] = 0x96;
         let pair = ConsolidationPredeploy::decode_predeploy_calldata(&data).expect("should decode");
@@ -75,8 +134,31 @@ mod tests {
         assert!(ConsolidationPredeploy::is_predeploy_address(
             "0x0000bbddc7ce488642fb579f8b00f3a590007251"
         ));
+        assert!(ConsolidationPredeploy::is_predeploy_address(
+            "0000bbddc7ce488642fb579f8b00f3a590007251"
+        ));
         assert!(!ConsolidationPredeploy::is_predeploy_address(
             "0x1111111111111111111111111111111111111111"
         ));
+    }
+
+    #[test]
+    fn test_match_pairs_in_calldata() {
+        let pair = ConsolidationPair::new(
+            "0x8a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
+            "0x9b0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002",
+        );
+
+        // Prepend multicall selector + offset
+        let mut calldata = vec![0x12, 0x34, 0x56, 0x78];
+        let src_bytes = hex::decode(pair.source_pubkey.trim_start_matches("0x")).unwrap();
+        let tgt_bytes = hex::decode(pair.target_pubkey.trim_start_matches("0x")).unwrap();
+        calldata.extend_from_slice(&src_bytes);
+        calldata.extend_from_slice(&tgt_bytes);
+
+        let matches =
+            ConsolidationPredeploy::match_pairs_in_calldata(&calldata, std::slice::from_ref(&pair));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0], pair);
     }
 }
