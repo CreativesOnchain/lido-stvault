@@ -1,5 +1,6 @@
 # Lido stVault Consolidation Request Receipt CLI (`stvault-receipt`)
 
+[![Crates.io](https://img.shields.io/crates/v/stvault-receipt.svg)](https://crates.io/crates/stvault-receipt)
 [![Rust](https://img.shields.io/badge/rust-1.80%2B-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
 [![CI](https://github.com/CreativesOnchain/lido-stvault/actions/workflows/ci.yml/badge.svg)](https://github.com/CreativesOnchain/lido-stvault/actions/workflows/ci.yml)
@@ -66,6 +67,14 @@ Every validator pair is deterministically classified into one of four statuses:
 ---
 
 ## Installation & Building
+
+### From Crates.io
+
+```bash
+cargo install stvault-receipt
+```
+
+### From Source
 
 ```bash
 # Clone the repository
