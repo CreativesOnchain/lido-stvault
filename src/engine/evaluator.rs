@@ -55,14 +55,7 @@ impl VerificationEngine {
 
         for pair in manifest_pairs {
             let pair_result = build_pair_verification_result(pair, &el_evidence, &cl_evidence);
-
-            match pair_result.status {
-                ConsolidationStatus::Accepted => summary.accepted += 1,
-                ConsolidationStatus::Queued => summary.queued += 1,
-                ConsolidationStatus::NotAccepted => summary.not_accepted += 1,
-                ConsolidationStatus::Indeterminate => summary.indeterminate += 1,
-            }
-
+            summary.record_status(pair_result.status);
             results.push(pair_result);
         }
 

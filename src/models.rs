@@ -1,50 +1,77 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 /// Represents a source -> target validator consolidation pair from the manifest.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ConsolidationPair {
-    /// 48-byte BLS public key of source validator (0x-prefixed hex string)
+    /// 48-byte BLS public key of source validator (0x-prefixed lowercase hex string)
     pub source_pubkey: String,
-    /// 48-byte BLS public key of target validator (0x-prefixed hex string)
+    /// 48-byte BLS public key of target validator (0x-prefixed lowercase hex string)
     pub target_pubkey: String,
 }
 
 impl ConsolidationPair {
-    pub fn new(source: impl Into<String>, target: impl Into<String>) -> Self {
+    /// Creates a new `ConsolidationPair` with normalized, lowercase `0x`-prefixed public keys.
+    pub fn new(source: impl AsRef<str>, target: impl AsRef<str>) -> Self {
         Self {
-            source_pubkey: normalize_pubkey(&source.into()),
-            target_pubkey: normalize_pubkey(&target.into()),
+            source_pubkey: normalize_pubkey(source.as_ref()),
+            target_pubkey: normalize_pubkey(target.as_ref()),
         }
     }
 }
 
-/// Normalizes a public key to lowercase 0x-prefixed hex string.
+/// Normalizes a public key string to a lowercase, `0x`-prefixed hex string.
 pub fn normalize_pubkey(pubkey: &str) -> String {
     let trimmed = pubkey.trim();
     if trimmed.starts_with("0x") || trimmed.starts_with("0X") {
         trimmed.to_lowercase()
     } else {
-        format!("0x{}", trimmed).to_lowercase()
+        let mut s = String::with_capacity(trimmed.len() + 2);
+        s.push_str("0x");
+        s.push_str(&trimmed.to_lowercase());
+        s
     }
 }
 
-/// Verification status for a consolidation pair.
+/// Cross-layer verification status for a consolidation pair.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ConsolidationStatus {
-    /// Request verified in EL, included in Beacon block, and accepted into CL pending_consolidations queue.
+    /// Request verified in EL, included in Beacon block, and accepted into CL `pending_consolidations` queue.
     Accepted,
-    /// Request submitted on EL and/or included in Beacon block, but pending CL state update.
+    /// Request submitted on EL and/or included in Beacon block, awaiting CL state update.
     Queued,
-    /// Request was dropped or rejected by consensus rules (e.g. invalid credentials, queue full, inactive).
+    /// Request was dropped or rejected by consensus rules.
     NotAccepted,
-    /// Status cannot be verified with certainty due to missing blocks, RPC error, reorg, or unsupported API.
+    /// Status cannot be verified with certainty (e.g. missing EL receipt, pruned Beacon state).
     Indeterminate,
 }
 
-impl std::fmt::Display for ConsolidationStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl ConsolidationStatus {
+    /// Returns `true` if the request is definitively confirmed in the consensus pending queue.
+    pub fn is_accepted(self) -> bool {
+        matches!(self, Self::Accepted)
+    }
+
+    /// Returns `true` if the request is queued awaiting state processing.
+    pub fn is_queued(self) -> bool {
+        matches!(self, Self::Queued)
+    }
+
+    /// Returns `true` if the request failed or was not accepted.
+    pub fn is_rejected(self) -> bool {
+        matches!(self, Self::NotAccepted)
+    }
+
+    /// Returns `true` if the request state could not be resolved.
+    pub fn is_indeterminate(self) -> bool {
+        matches!(self, Self::Indeterminate)
+    }
+}
+
+impl fmt::Display for ConsolidationStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Accepted => write!(f, "ACCEPTED"),
             Self::Queued => write!(f, "QUEUED"),
@@ -72,7 +99,7 @@ pub struct PairVerificationResult {
     pub indeterminate_reason: Option<String>,
 }
 
-/// Status report for Lido's NODE_OPERATOR_FEE_EXEMPT_ROLE.
+/// Status report for Lido's `NODE_OPERATOR_FEE_EXEMPT_ROLE`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LidoFeeExemptionReport {
     pub st_vault_dashboard: Option<String>,
@@ -93,6 +120,37 @@ pub struct VerificationSummary {
     pub indeterminate: usize,
 }
 
+impl VerificationSummary {
+    /// Records a pair's verification status into the metric counters.
+    pub fn record_status(&mut self, status: ConsolidationStatus) {
+        match status {
+            ConsolidationStatus::Accepted => self.accepted += 1,
+            ConsolidationStatus::Queued => self.queued += 1,
+            ConsolidationStatus::NotAccepted => self.not_accepted += 1,
+            ConsolidationStatus::Indeterminate => self.indeterminate += 1,
+        }
+    }
+
+    /// Returns `true` if every pair in the manifest was verified as `Accepted`.
+    pub fn is_all_accepted(&self) -> bool {
+        self.accepted == self.total_pairs && self.total_pairs > 0
+    }
+
+    /// Returns `true` if any pair was rejected or returned indeterminate.
+    pub fn has_attention_items(&self) -> bool {
+        self.not_accepted > 0 || self.indeterminate > 0
+    }
+
+    /// Returns the acceptance percentage (0.0% to 100.0%).
+    pub fn acceptance_percentage(&self) -> f64 {
+        if self.total_pairs > 0 {
+            (self.accepted as f64 / self.total_pairs as f64) * 100.0
+        } else {
+            0.0
+        }
+    }
+}
+
 /// Complete machine-readable verification receipt.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerificationReceipt {
@@ -103,4 +161,42 @@ pub struct VerificationReceipt {
     pub summary: VerificationSummary,
     pub fee_exemption: LidoFeeExemptionReport,
     pub pairs: Vec<PairVerificationResult>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalize_pubkey() {
+        assert_eq!(normalize_pubkey("0xABCD"), "0xabcd");
+        assert_eq!(normalize_pubkey("0XABCD"), "0xabcd");
+        assert_eq!(normalize_pubkey("abcd"), "0xabcd");
+        assert_eq!(normalize_pubkey("  0x1234  "), "0x1234");
+    }
+
+    #[test]
+    fn test_verification_summary_metrics() {
+        let mut summary = VerificationSummary {
+            total_pairs: 3,
+            ..Default::default()
+        };
+
+        summary.record_status(ConsolidationStatus::Accepted);
+        summary.record_status(ConsolidationStatus::Accepted);
+        summary.record_status(ConsolidationStatus::Queued);
+
+        assert_eq!(summary.accepted, 2);
+        assert_eq!(summary.queued, 1);
+        assert!(!summary.is_all_accepted());
+        assert_eq!(summary.acceptance_percentage(), (2.0 / 3.0) * 100.0);
+
+        let all_ok = VerificationSummary {
+            total_pairs: 2,
+            accepted: 2,
+            ..Default::default()
+        };
+        assert!(all_ok.is_all_accepted());
+        assert!(!all_ok.has_attention_items());
+    }
 }

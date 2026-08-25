@@ -219,7 +219,7 @@ async fn main() -> ExitCode {
     }
 
     // Exit code: 0 if all accepted, 1 if any failure or indeterminate
-    if receipt.summary.accepted == receipt.summary.total_pairs && receipt.summary.total_pairs > 0 {
+    if receipt.summary.is_all_accepted() {
         ExitCode::SUCCESS
     } else {
         ExitCode::from(1)

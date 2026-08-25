@@ -37,17 +37,14 @@ fn render_header(md: &mut String, receipt: &VerificationReceipt) {
 }
 
 fn render_status_banner(md: &mut String, receipt: &VerificationReceipt) {
-    let is_all_accepted =
-        receipt.summary.accepted == receipt.summary.total_pairs && receipt.summary.total_pairs > 0;
-
-    if is_all_accepted {
+    if receipt.summary.is_all_accepted() {
         let _ = writeln!(md, "> [!NOTE]");
         let _ = writeln!(md, "> **STATUS: ALL CONSOLIDATION REQUESTS ACCEPTED**");
         let _ = writeln!(
             md,
             "> All consolidation pairs have been verified in the Consensus Layer pending queue.\n"
         );
-    } else if receipt.summary.not_accepted > 0 || receipt.summary.indeterminate > 0 {
+    } else if receipt.summary.has_attention_items() {
         let _ = writeln!(md, "> [!WARNING]");
         let _ = writeln!(md, "> **STATUS: ATTENTION REQUIRED**");
         let _ = writeln!(
