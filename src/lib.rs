@@ -7,6 +7,7 @@ pub mod lido;
 pub mod manifest;
 pub mod models;
 pub mod receipt;
+pub mod terminal;
 
 pub use cl::BeaconClient;
 pub use cli::{CliArgs, OutputFormat};
@@ -18,5 +19,6 @@ pub use models::{
     ConsolidationPair, ConsolidationStatus, PairVerificationResult, VerificationReceipt,
 };
 pub use receipt::{
-    EvidenceWriter, generate_csv_receipt, generate_json_receipt, generate_markdown_receipt,
+    EvidenceWriter, ReceiptArtifacts, generate_and_save_receipts, generate_csv_receipt,
+    generate_json_receipt, generate_markdown_receipt,
 };
