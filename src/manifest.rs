@@ -3,15 +3,29 @@ use crate::models::ConsolidationPair;
 use serde::Deserialize;
 use std::path::Path;
 
+/// Expected length of a BLS public key in hex characters (48 bytes = 96 hex characters).
+pub const BLS_PUBKEY_HEX_LEN: usize = 96;
+
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum ManifestFormat {
-    /// Format 1: Direct list of pair items
+    /// Format 1: Direct list of pair items (`[{ "source": "...", "target": "..." }]`)
     DirectList(Vec<PairItem>),
-    /// Format 2: Object containing a "pairs" list
+    /// Format 2: Object containing a "pairs" list (`{ "pairs": [...] }`)
     PairsWrapper { pairs: Vec<PairItem> },
-    /// Format 3: Object containing a "consolidations" list
+    /// Format 3: Object containing a "consolidations" list (`{ "consolidations": [...] }`)
     ConsolidationsWrapper { consolidations: Vec<PairItem> },
+}
+
+impl ManifestFormat {
+    /// Unwraps the parsed manifest format into a uniform list of `PairItem`s.
+    fn into_pairs(self) -> Vec<PairItem> {
+        match self {
+            Self::DirectList(list) => list,
+            Self::PairsWrapper { pairs } => pairs,
+            Self::ConsolidationsWrapper { consolidations } => consolidations,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -34,10 +48,11 @@ struct PairItem {
 
 /// Parses and validates a Lido stVault consolidation manifest file (JSON or YAML).
 pub fn parse_manifest_file<P: AsRef<Path>>(path: P) -> Result<Vec<ConsolidationPair>> {
-    let content = std::fs::read_to_string(path.as_ref()).map_err(|e| {
+    let p = path.as_ref();
+    let content = std::fs::read_to_string(p).map_err(|e| {
         AppError::Manifest(format!(
             "Failed to read manifest file '{}': {}",
-            path.as_ref().display(),
+            p.display(),
             e
         ))
     })?;
@@ -52,26 +67,17 @@ pub fn parse_manifest_str(content: &str) -> Result<Vec<ConsolidationPair>> {
     }
 
     // Try parsing as JSON first, fallback to YAML
-    let raw_pairs: Vec<PairItem> = if let Ok(parsed) =
-        serde_json::from_str::<ManifestFormat>(trimmed)
-    {
-        match parsed {
-            ManifestFormat::DirectList(list) => list,
-            ManifestFormat::PairsWrapper { pairs } => pairs,
-            ManifestFormat::ConsolidationsWrapper { consolidations } => consolidations,
-        }
-    } else if let Ok(parsed) = serde_yaml::from_str::<ManifestFormat>(trimmed) {
-        match parsed {
-            ManifestFormat::DirectList(list) => list,
-            ManifestFormat::PairsWrapper { pairs } => pairs,
-            ManifestFormat::ConsolidationsWrapper { consolidations } => consolidations,
-        }
-    } else {
-        return Err(AppError::Manifest(
-            "Unsupported manifest structure. Expected JSON/YAML list of pairs or object with 'pairs'/'consolidations' key."
-                .to_string(),
-        ));
-    };
+    let raw_pairs: Vec<PairItem> = serde_json::from_str::<ManifestFormat>(trimmed)
+        .map(ManifestFormat::into_pairs)
+        .or_else(|_| {
+            serde_yaml::from_str::<ManifestFormat>(trimmed).map(ManifestFormat::into_pairs)
+        })
+        .map_err(|_| {
+            AppError::Manifest(
+                "Unsupported manifest structure. Expected JSON/YAML list of pairs or object with 'pairs'/'consolidations' key."
+                    .to_string(),
+            )
+        })?;
 
     if raw_pairs.is_empty() {
         return Err(AppError::Manifest(
@@ -89,14 +95,14 @@ pub fn parse_manifest_str(content: &str) -> Result<Vec<ConsolidationPair>> {
     Ok(result)
 }
 
-/// Validates that a BLS public key is a valid 48-byte hex string (96 hex characters).
+/// Validates that a BLS public key is a valid 48-byte hex string (zero heap allocations).
 fn validate_pubkey(pubkey: &str, field_desc: &str) -> Result<()> {
     let cleaned = pubkey
         .trim()
-        .strip_prefix("0x")
-        .or_else(|| pubkey.trim().strip_prefix("0X"))
-        .unwrap_or(pubkey.trim());
-    if cleaned.len() != 96 {
+        .trim_start_matches("0x")
+        .trim_start_matches("0X");
+
+    if cleaned.len() != BLS_PUBKEY_HEX_LEN {
         return Err(AppError::Manifest(format!(
             "Invalid BLS public key length for {} (expected 48 bytes / 96 hex characters, got {} characters): '{}'",
             field_desc,
@@ -105,13 +111,14 @@ fn validate_pubkey(pubkey: &str, field_desc: &str) -> Result<()> {
         )));
     }
 
-    // Validate hex characters
-    if let Err(e) = hex::decode(cleaned) {
-        return Err(AppError::Manifest(format!(
+    // Zero-allocation stack buffer hex validation
+    let mut buf = [0u8; 48];
+    hex::decode_to_slice(cleaned, &mut buf).map_err(|e| {
+        AppError::Manifest(format!(
             "Invalid hex characters in BLS public key for {}: {}",
             field_desc, e
-        )));
-    }
+        ))
+    })?;
 
     Ok(())
 }
@@ -159,5 +166,16 @@ mod tests {
     fn test_invalid_pubkey_length() {
         let json = r#"[ {"source": "0x1234", "target": "0x5678"} ]"#;
         assert!(parse_manifest_str(json).is_err());
+    }
+
+    #[test]
+    fn test_invalid_hex_characters() {
+        let invalid_pubkey = "0xzz9233f81e69b07ef94dd6d9dfd7ab6c7e112d7c07dd5aa9e8a83d3e8e2e92c48858e37ab7b3117562ad846ef3294ee1";
+        let json = format!(
+            r#"[ {{"source": "{}", "target": "{}"}} ]"#,
+            invalid_pubkey, SAMPLE_TARGET
+        );
+        let res = parse_manifest_str(&json);
+        assert!(res.is_err());
     }
 }
