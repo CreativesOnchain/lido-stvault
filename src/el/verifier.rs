@@ -1,32 +1,9 @@
-use super::client::{BlockDetails, ElClient, TxDetails, TxReceipt};
+use super::client::ElClient;
 use super::predeploy::ConsolidationPredeploy;
+use super::types::{ElVerificationEvidence, ElVerifiedTx};
 use crate::error::{AppError, Result};
 use crate::models::ConsolidationPair;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ElVerifiedTx {
-    pub tx_hash: String,
-    pub status_success: bool,
-    pub block_number: u64,
-    pub block_hash: String,
-    pub block_timestamp: u64,
-    pub from: String,
-    pub to: Option<String>,
-    pub predeploy_interaction_detected: bool,
-    pub matched_manifest_pairs: Vec<ConsolidationPair>,
-    pub receipt: TxReceipt,
-    pub details: Option<TxDetails>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ElVerificationEvidence {
-    pub verified_txs: HashMap<String, ElVerifiedTx>,
-    pub pair_to_tx_map: HashMap<ConsolidationPair, String>,
-    pub raw_receipts: HashMap<String, serde_json::Value>,
-    pub raw_blocks: HashMap<u64, BlockDetails>,
-}
 
 pub async fn verify_execution_layer(
     client: &ElClient,

@@ -1,6 +1,6 @@
+use super::types::{BlockDetails, TxDetails, TxLog, TxReceipt};
 use crate::error::{AppError, Result};
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::time::Duration;
 
@@ -10,49 +10,12 @@ pub struct ElClient {
     http: Client,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TxReceipt {
-    pub transaction_hash: String,
-    pub block_number: u64,
-    pub block_hash: String,
-    pub status: bool,
-    pub gas_used: u64,
-    pub from: String,
-    pub to: Option<String>,
-    pub logs: Vec<TxLog>,
-    pub raw: Value,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TxLog {
-    pub address: String,
-    pub topics: Vec<String>,
-    pub data: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TxDetails {
-    pub hash: String,
-    pub block_number: Option<u64>,
-    pub from: String,
-    pub to: Option<String>,
-    pub input: String,
-    pub value: String,
-    pub raw: Value,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BlockDetails {
-    pub number: u64,
-    pub hash: String,
-    pub timestamp: u64,
-    pub raw: Value,
-}
-
 impl ElClient {
+    /// Creates a new Execution Layer JSON-RPC client with a connection pool.
     pub fn new(rpc_url: impl Into<String>) -> Self {
         let http = Client::builder()
             .timeout(Duration::from_secs(15))
+            .pool_idle_timeout(Duration::from_secs(90))
             .build()
             .expect("failed to create reqwest client");
         Self {
@@ -61,10 +24,12 @@ impl ElClient {
         }
     }
 
+    /// Returns the RPC endpoint URL.
     pub fn rpc_url(&self) -> &str {
         &self.rpc_url
     }
 
+    /// Dispatches a JSON-RPC 2.0 request and returns the parsed `result` payload.
     async fn call_rpc(&self, method: &str, params: Value) -> Result<Value> {
         let payload = json!({
             "jsonrpc": "2.0",
@@ -106,7 +71,7 @@ impl ElClient {
         Ok(json_resp.get("result").cloned().unwrap_or(Value::Null))
     }
 
-    /// Fetches transaction receipt.
+    /// Fetches transaction receipt by hash (`eth_getTransactionReceipt`).
     pub async fn get_transaction_receipt(&self, tx_hash: &str) -> Result<Option<TxReceipt>> {
         let result = self
             .call_rpc("eth_getTransactionReceipt", json!([tx_hash]))
@@ -115,63 +80,15 @@ impl ElClient {
             return Ok(None);
         }
 
-        let status_hex = result
-            .get("status")
-            .and_then(|v| v.as_str())
-            .unwrap_or("0x0");
+        let status_hex = extract_str(&result, "status");
         let status = status_hex == "0x1" || status_hex == "1";
-
-        let block_number_hex = result
-            .get("blockNumber")
-            .and_then(|v| v.as_str())
-            .unwrap_or("0x0");
-        let block_number = parse_hex_u64(block_number_hex)?;
-
-        let block_hash = result
-            .get("blockHash")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string();
-        let transaction_hash = result
-            .get("transactionHash")
-            .and_then(|v| v.as_str())
-            .unwrap_or(tx_hash)
-            .to_string();
-        let from = result
-            .get("from")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string();
-        let to = result
-            .get("to")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-
-        let gas_used_hex = result
-            .get("gasUsed")
-            .and_then(|v| v.as_str())
-            .unwrap_or("0x0");
-        let gas_used = parse_hex_u64(gas_used_hex).unwrap_or(0);
-
-        let logs = if let Some(logs_arr) = result.get("logs").and_then(|v| v.as_array()) {
-            logs_arr
-                .iter()
-                .filter_map(|l| {
-                    Some(TxLog {
-                        address: l.get("address")?.as_str()?.to_string(),
-                        topics: l
-                            .get("topics")?
-                            .as_array()?
-                            .iter()
-                            .filter_map(|t| t.as_str().map(|s| s.to_string()))
-                            .collect(),
-                        data: l.get("data")?.as_str()?.to_string(),
-                    })
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
+        let block_number = extract_hex_u64(&result, "blockNumber")?;
+        let gas_used = extract_hex_u64(&result, "gasUsed").unwrap_or(0);
+        let block_hash = extract_str(&result, "blockHash");
+        let transaction_hash = extract_str_or(&result, "transactionHash", tx_hash);
+        let from = extract_str(&result, "from");
+        let to = extract_opt_str(&result, "to");
+        let logs = parse_logs(result.get("logs"));
 
         Ok(Some(TxReceipt {
             transaction_hash,
@@ -186,7 +103,7 @@ impl ElClient {
         }))
     }
 
-    /// Fetches transaction details.
+    /// Fetches transaction details by hash (`eth_getTransactionByHash`).
     pub async fn get_transaction_by_hash(&self, tx_hash: &str) -> Result<Option<TxDetails>> {
         let result = self
             .call_rpc("eth_getTransactionByHash", json!([tx_hash]))
@@ -195,35 +112,12 @@ impl ElClient {
             return Ok(None);
         }
 
-        let block_number = result
-            .get("blockNumber")
-            .and_then(|v| v.as_str())
-            .and_then(|s| parse_hex_u64(s).ok());
-
-        let hash = result
-            .get("hash")
-            .and_then(|v| v.as_str())
-            .unwrap_or(tx_hash)
-            .to_string();
-        let from = result
-            .get("from")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string();
-        let to = result
-            .get("to")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        let input = result
-            .get("input")
-            .and_then(|v| v.as_str())
-            .unwrap_or("0x")
-            .to_string();
-        let value = result
-            .get("value")
-            .and_then(|v| v.as_str())
-            .unwrap_or("0x0")
-            .to_string();
+        let block_number = extract_hex_u64(&result, "blockNumber").ok();
+        let hash = extract_str_or(&result, "hash", tx_hash);
+        let from = extract_str(&result, "from");
+        let to = extract_opt_str(&result, "to");
+        let input = extract_str_or(&result, "input", "0x");
+        let value = extract_str_or(&result, "value", "0x0");
 
         Ok(Some(TxDetails {
             hash,
@@ -236,7 +130,7 @@ impl ElClient {
         }))
     }
 
-    /// Fetches block details by number.
+    /// Fetches block details by number (`eth_getBlockByNumber`).
     pub async fn get_block_by_number(&self, block_number: u64) -> Result<Option<BlockDetails>> {
         let block_num_hex = format!("0x{:x}", block_number);
         let result = self
@@ -246,16 +140,8 @@ impl ElClient {
             return Ok(None);
         }
 
-        let hash = result
-            .get("hash")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string();
-        let timestamp_hex = result
-            .get("timestamp")
-            .and_then(|v| v.as_str())
-            .unwrap_or("0x0");
-        let timestamp = parse_hex_u64(timestamp_hex).unwrap_or(0);
+        let hash = extract_str(&result, "hash");
+        let timestamp = extract_hex_u64(&result, "timestamp").unwrap_or(0);
 
         Ok(Some(BlockDetails {
             number: block_number,
@@ -265,7 +151,7 @@ impl ElClient {
         }))
     }
 
-    /// Executes read-only eth_call.
+    /// Executes a read-only contract call (`eth_call`).
     pub async fn eth_call(&self, to: &str, data: &str) -> Result<String> {
         let tx_obj = json!({
             "to": to,
@@ -276,15 +162,84 @@ impl ElClient {
     }
 }
 
-fn parse_hex_u64(hex_str: &str) -> Result<u64> {
+// -----------------------------------------------------------------------------
+// JSON Field Extraction Helpers
+// -----------------------------------------------------------------------------
+
+/// Extracts a string property from a JSON `Value`.
+fn extract_str(val: &Value, field: &str) -> String {
+    val.get(field)
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Extracts a string property with a fallback default.
+fn extract_str_or(val: &Value, field: &str, default: &str) -> String {
+    val.get(field)
+        .and_then(|v| v.as_str())
+        .unwrap_or(default)
+        .to_string()
+}
+
+/// Extracts an optional string property from a JSON `Value`.
+fn extract_opt_str(val: &Value, field: &str) -> Option<String> {
+    val.get(field)
+        .and_then(|v| v.as_str())
+        .map(ToString::to_string)
+}
+
+/// Extracts and parses a hex-encoded `u64` from a JSON `Value`.
+fn extract_hex_u64(val: &Value, field: &str) -> Result<u64> {
+    let hex_str = val.get(field).and_then(|v| v.as_str()).unwrap_or("0x0");
+    parse_hex_u64(hex_str)
+}
+
+/// Parses transaction logs array from an RPC receipt.
+fn parse_logs(logs_val: Option<&Value>) -> Vec<TxLog> {
+    match logs_val.and_then(|v| v.as_array()) {
+        Some(logs_arr) => logs_arr
+            .iter()
+            .filter_map(|l| {
+                Some(TxLog {
+                    address: extract_str(l, "address"),
+                    topics: l
+                        .get("topics")?
+                        .as_array()?
+                        .iter()
+                        .filter_map(|t| t.as_str().map(ToString::to_string))
+                        .collect(),
+                    data: extract_str(l, "data"),
+                })
+            })
+            .collect(),
+        None => Vec::new(),
+    }
+}
+
+/// Parses a hex string (`0x...` or clean hex) into a `u64`.
+pub fn parse_hex_u64(hex_str: &str) -> Result<u64> {
     let clean = hex_str
         .trim()
-        .strip_prefix("0x")
-        .or_else(|| hex_str.trim().strip_prefix("0X"))
-        .unwrap_or(hex_str.trim());
+        .trim_start_matches("0x")
+        .trim_start_matches("0X");
     if clean.is_empty() {
         return Ok(0);
     }
     u64::from_str_radix(clean, 16)
         .map_err(|e| AppError::ElRpc(format!("Failed to parse hex u64 '{}': {}", hex_str, e)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_hex_u64() {
+        assert_eq!(parse_hex_u64("0x0").unwrap(), 0);
+        assert_eq!(parse_hex_u64("0x10").unwrap(), 16);
+        assert_eq!(parse_hex_u64("0xff").unwrap(), 255);
+        assert_eq!(parse_hex_u64("100").unwrap(), 256);
+        assert_eq!(parse_hex_u64("").unwrap(), 0);
+    }
 }

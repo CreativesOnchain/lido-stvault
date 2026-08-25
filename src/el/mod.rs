@@ -1,7 +1,9 @@
 pub mod client;
 pub mod predeploy;
+mod types;
 pub mod verifier;
 
 pub use client::ElClient;
 pub use predeploy::ConsolidationPredeploy;
-pub use verifier::{ElVerificationEvidence, ElVerifiedTx, verify_execution_layer};
+pub use types::{ElVerificationEvidence, ElVerifiedTx};
+pub use verifier::verify_execution_layer;
