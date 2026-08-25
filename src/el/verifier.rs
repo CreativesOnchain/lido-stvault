@@ -39,17 +39,26 @@ pub async fn verify_execution_layer(
     let mut raw_blocks = HashMap::new();
 
     for tx_hash in tx_hashes {
-        let receipt = client.get_transaction_receipt(tx_hash).await?.ok_or_else(|| {
-            AppError::ElRpc(format!("Transaction receipt not found for {}", tx_hash))
-        })?;
+        let receipt = client
+            .get_transaction_receipt(tx_hash)
+            .await?
+            .ok_or_else(|| {
+                AppError::ElRpc(format!("Transaction receipt not found for {}", tx_hash))
+            })?;
 
         raw_receipts.insert(tx_hash.clone(), receipt.raw.clone());
 
         let tx_details = client.get_transaction_by_hash(tx_hash).await.ok().flatten();
 
-        let block = client.get_block_by_number(receipt.block_number).await?.ok_or_else(|| {
-            AppError::ElRpc(format!("Block not found for number {}", receipt.block_number))
-        })?;
+        let block = client
+            .get_block_by_number(receipt.block_number)
+            .await?
+            .ok_or_else(|| {
+                AppError::ElRpc(format!(
+                    "Block not found for number {}",
+                    receipt.block_number
+                ))
+            })?;
 
         let block_timestamp = block.timestamp;
         raw_blocks.insert(receipt.block_number, block);
@@ -129,5 +138,10 @@ pub async fn verify_execution_layer(
         verified_txs.insert(tx_hash.clone(), verified);
     }
 
-    Ok(ElVerificationEvidence { verified_txs, pair_to_tx_map, raw_receipts, raw_blocks })
+    Ok(ElVerificationEvidence {
+        verified_txs,
+        pair_to_tx_map,
+        raw_receipts,
+        raw_blocks,
+    })
 }

@@ -33,7 +33,11 @@ impl VerificationEngine {
             verify_consensus_layer(beacon_client, manifest_pairs, &el_block_timestamps).await?;
 
         // Step 3: Extract operator address from first valid EL tx (if any)
-        let operator_address = el_evidence.verified_txs.values().next().map(|tx| tx.from.as_str());
+        let operator_address = el_evidence
+            .verified_txs
+            .values()
+            .next()
+            .map(|tx| tx.from.as_str());
 
         // Step 4: Check Lido fee exemption role
         let fee_exemption = LidoRoleInspector::check_fee_exempt_role(
@@ -46,12 +50,16 @@ impl VerificationEngine {
 
         // Step 5: Evaluate each pair deterministically
         let mut results = Vec::with_capacity(manifest_pairs.len());
-        let mut summary =
-            VerificationSummary { total_pairs: manifest_pairs.len(), ..Default::default() };
+        let mut summary = VerificationSummary {
+            total_pairs: manifest_pairs.len(),
+            ..Default::default()
+        };
 
         for pair in manifest_pairs {
             let el_tx_hash = el_evidence.pair_to_tx_map.get(pair).cloned();
-            let el_tx = el_tx_hash.as_ref().and_then(|h| el_evidence.verified_txs.get(h));
+            let el_tx = el_tx_hash
+                .as_ref()
+                .and_then(|h| el_evidence.verified_txs.get(h));
 
             let cl_pair = cl_evidence.pair_evidence.get(pair);
 

@@ -55,7 +55,10 @@ impl ElClient {
             .timeout(Duration::from_secs(15))
             .build()
             .expect("failed to create reqwest client");
-        Self { rpc_url: rpc_url.into(), http }
+        Self {
+            rpc_url: rpc_url.into(),
+            http,
+        }
     }
 
     pub fn rpc_url(&self) -> &str {
@@ -70,10 +73,13 @@ impl ElClient {
             "params": params,
         });
 
-        let resp =
-            self.http.post(&self.rpc_url).json(&payload).send().await.map_err(|e| {
-                AppError::ElRpc(format!("HTTP request failed for {}: {}", method, e))
-            })?;
+        let resp = self
+            .http
+            .post(&self.rpc_url)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| AppError::ElRpc(format!("HTTP request failed for {}: {}", method, e)))?;
 
         if !resp.status().is_success() {
             return Err(AppError::ElRpc(format!(
@@ -84,11 +90,17 @@ impl ElClient {
         }
 
         let json_resp: Value = resp.json().await.map_err(|e| {
-            AppError::ElRpc(format!("Failed to parse RPC JSON response for {}: {}", method, e))
+            AppError::ElRpc(format!(
+                "Failed to parse RPC JSON response for {}: {}",
+                method, e
+            ))
         })?;
 
         if let Some(error) = json_resp.get("error") {
-            return Err(AppError::ElRpc(format!("RPC error for {}: {}", method, error)));
+            return Err(AppError::ElRpc(format!(
+                "RPC error for {}: {}",
+                method, error
+            )));
         }
 
         Ok(json_resp.get("result").cloned().unwrap_or(Value::Null))
@@ -96,25 +108,49 @@ impl ElClient {
 
     /// Fetches transaction receipt.
     pub async fn get_transaction_receipt(&self, tx_hash: &str) -> Result<Option<TxReceipt>> {
-        let result = self.call_rpc("eth_getTransactionReceipt", json!([tx_hash])).await?;
+        let result = self
+            .call_rpc("eth_getTransactionReceipt", json!([tx_hash]))
+            .await?;
         if result.is_null() {
             return Ok(None);
         }
 
-        let status_hex = result.get("status").and_then(|v| v.as_str()).unwrap_or("0x0");
+        let status_hex = result
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("0x0");
         let status = status_hex == "0x1" || status_hex == "1";
 
-        let block_number_hex = result.get("blockNumber").and_then(|v| v.as_str()).unwrap_or("0x0");
+        let block_number_hex = result
+            .get("blockNumber")
+            .and_then(|v| v.as_str())
+            .unwrap_or("0x0");
         let block_number = parse_hex_u64(block_number_hex)?;
 
-        let block_hash =
-            result.get("blockHash").and_then(|v| v.as_str()).unwrap_or_default().to_string();
-        let transaction_hash =
-            result.get("transactionHash").and_then(|v| v.as_str()).unwrap_or(tx_hash).to_string();
-        let from = result.get("from").and_then(|v| v.as_str()).unwrap_or_default().to_string();
-        let to = result.get("to").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let block_hash = result
+            .get("blockHash")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let transaction_hash = result
+            .get("transactionHash")
+            .and_then(|v| v.as_str())
+            .unwrap_or(tx_hash)
+            .to_string();
+        let from = result
+            .get("from")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let to = result
+            .get("to")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
 
-        let gas_used_hex = result.get("gasUsed").and_then(|v| v.as_str()).unwrap_or("0x0");
+        let gas_used_hex = result
+            .get("gasUsed")
+            .and_then(|v| v.as_str())
+            .unwrap_or("0x0");
         let gas_used = parse_hex_u64(gas_used_hex).unwrap_or(0);
 
         let logs = if let Some(logs_arr) = result.get("logs").and_then(|v| v.as_array()) {
@@ -152,36 +188,81 @@ impl ElClient {
 
     /// Fetches transaction details.
     pub async fn get_transaction_by_hash(&self, tx_hash: &str) -> Result<Option<TxDetails>> {
-        let result = self.call_rpc("eth_getTransactionByHash", json!([tx_hash])).await?;
+        let result = self
+            .call_rpc("eth_getTransactionByHash", json!([tx_hash]))
+            .await?;
         if result.is_null() {
             return Ok(None);
         }
 
-        let block_number =
-            result.get("blockNumber").and_then(|v| v.as_str()).and_then(|s| parse_hex_u64(s).ok());
+        let block_number = result
+            .get("blockNumber")
+            .and_then(|v| v.as_str())
+            .and_then(|s| parse_hex_u64(s).ok());
 
-        let hash = result.get("hash").and_then(|v| v.as_str()).unwrap_or(tx_hash).to_string();
-        let from = result.get("from").and_then(|v| v.as_str()).unwrap_or_default().to_string();
-        let to = result.get("to").and_then(|v| v.as_str()).map(|s| s.to_string());
-        let input = result.get("input").and_then(|v| v.as_str()).unwrap_or("0x").to_string();
-        let value = result.get("value").and_then(|v| v.as_str()).unwrap_or("0x0").to_string();
+        let hash = result
+            .get("hash")
+            .and_then(|v| v.as_str())
+            .unwrap_or(tx_hash)
+            .to_string();
+        let from = result
+            .get("from")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let to = result
+            .get("to")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let input = result
+            .get("input")
+            .and_then(|v| v.as_str())
+            .unwrap_or("0x")
+            .to_string();
+        let value = result
+            .get("value")
+            .and_then(|v| v.as_str())
+            .unwrap_or("0x0")
+            .to_string();
 
-        Ok(Some(TxDetails { hash, block_number, from, to, input, value, raw: result }))
+        Ok(Some(TxDetails {
+            hash,
+            block_number,
+            from,
+            to,
+            input,
+            value,
+            raw: result,
+        }))
     }
 
     /// Fetches block details by number.
     pub async fn get_block_by_number(&self, block_number: u64) -> Result<Option<BlockDetails>> {
         let block_num_hex = format!("0x{:x}", block_number);
-        let result = self.call_rpc("eth_getBlockByNumber", json!([block_num_hex, false])).await?;
+        let result = self
+            .call_rpc("eth_getBlockByNumber", json!([block_num_hex, false]))
+            .await?;
         if result.is_null() {
             return Ok(None);
         }
 
-        let hash = result.get("hash").and_then(|v| v.as_str()).unwrap_or_default().to_string();
-        let timestamp_hex = result.get("timestamp").and_then(|v| v.as_str()).unwrap_or("0x0");
+        let hash = result
+            .get("hash")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let timestamp_hex = result
+            .get("timestamp")
+            .and_then(|v| v.as_str())
+            .unwrap_or("0x0");
         let timestamp = parse_hex_u64(timestamp_hex).unwrap_or(0);
 
-        Ok(Some(BlockDetails { number: block_number, hash, timestamp, raw: result }))
+        Ok(Some(BlockDetails {
+            number: block_number,
+            hash,
+            timestamp,
+            raw: result,
+        }))
     }
 
     /// Executes read-only eth_call.

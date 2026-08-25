@@ -20,7 +20,12 @@ pub enum OutputFormat {
 )]
 pub struct CliArgs {
     /// Path to the Lido stVault consolidation manifest file (JSON or YAML)
-    #[arg(short, long, value_name = "PATH", required_unless_present = "generate_completions")]
+    #[arg(
+        short,
+        long,
+        value_name = "PATH",
+        required_unless_present = "generate_completions"
+    )]
     pub manifest: Option<PathBuf>,
 
     /// Execution layer transaction hash(es) separated by comma or specified multiple times
@@ -34,7 +39,12 @@ pub struct CliArgs {
     pub el_txs: Vec<String>,
 
     /// Ethereum Execution Layer JSON-RPC URL (e.g. http://127.0.0.1:8545)
-    #[arg(long, env = "EL_RPC_URL", value_name = "URL", default_value = "http://127.0.0.1:8545")]
+    #[arg(
+        long,
+        env = "EL_RPC_URL",
+        value_name = "URL",
+        default_value = "http://127.0.0.1:8545"
+    )]
     pub el_rpc: String,
 
     /// Ethereum Consensus Layer Beacon API URL (e.g. http://127.0.0.1:5052)
@@ -51,7 +61,12 @@ pub struct CliArgs {
     pub st_vault_dashboard: Option<String>,
 
     /// Output directory where receipts and evidence artifacts will be saved
-    #[arg(short, long, default_value = "./stvault_receipt_output", value_name = "DIR")]
+    #[arg(
+        short,
+        long,
+        default_value = "./stvault_receipt_output",
+        value_name = "DIR"
+    )]
     pub output_dir: PathBuf,
 
     /// Output format to print to stdout (all, markdown, json, csv)

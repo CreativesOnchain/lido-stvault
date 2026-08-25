@@ -20,7 +20,10 @@ impl BeaconClient {
             .timeout(Duration::from_secs(15))
             .build()
             .expect("failed to create reqwest client");
-        Self { base_url: trimmed, http }
+        Self {
+            base_url: trimmed,
+            http,
+        }
     }
 
     pub fn base_url(&self) -> &str {
@@ -81,10 +84,15 @@ impl BeaconClient {
 
         // Fallback: Query GET with query parameter id=pubkey1,pubkey2...
         let ids_param = pubkeys.join(",");
-        let get_url =
-            format!("{}/eth/v1/beacon/states/head/validators?id={}", self.base_url, ids_param);
+        let get_url = format!(
+            "{}/eth/v1/beacon/states/head/validators?id={}",
+            self.base_url, ids_param
+        );
         let resp = self.http.get(&get_url).send().await.map_err(|e| {
-            AppError::ClBeacon(format!("Failed to fetch validators from {}: {}", get_url, e))
+            AppError::ClBeacon(format!(
+                "Failed to fetch validators from {}: {}",
+                get_url, e
+            ))
         })?;
 
         if !resp.status().is_success() {
@@ -140,8 +148,10 @@ impl BeaconClient {
         &self,
         state_id: &str,
     ) -> Result<Vec<PendingConsolidationItem>> {
-        let url =
-            format!("{}/eth/v1/beacon/states/{}/pending_consolidations", self.base_url, state_id);
+        let url = format!(
+            "{}/eth/v1/beacon/states/{}/pending_consolidations",
+            self.base_url, state_id
+        );
         let resp = self.http.get(&url).send().await.map_err(|e| {
             AppError::ClBeacon(format!(
                 "Failed to fetch pending consolidations from {}: {}",
@@ -164,9 +174,15 @@ impl BeaconClient {
             )));
         }
 
-        let parsed = resp.json::<PendingConsolidationsResponse>().await.map_err(|e| {
-            AppError::ClBeacon(format!("Failed to parse PendingConsolidationsResponse: {}", e))
-        })?;
+        let parsed = resp
+            .json::<PendingConsolidationsResponse>()
+            .await
+            .map_err(|e| {
+                AppError::ClBeacon(format!(
+                    "Failed to parse PendingConsolidationsResponse: {}",
+                    e
+                ))
+            })?;
 
         Ok(parsed.data)
     }

@@ -24,15 +24,29 @@ async fn main() -> ExitCode {
     let manifest_path = match args.manifest.as_ref() {
         Some(p) => p,
         None => {
-            eprintln!("{} Missing required argument: --manifest <PATH>", "ERROR:".bold().red());
+            eprintln!(
+                "{} Missing required argument: --manifest <PATH>",
+                "ERROR:".bold().red()
+            );
             return ExitCode::from(2);
         }
     };
 
     if !args.quiet {
-        println!("{}", "=========================================================".cyan());
-        println!("{}", "       Lido stVault Consolidation Request Receipt        ".bold().cyan());
-        println!("{}", "=========================================================".cyan());
+        println!(
+            "{}",
+            "=========================================================".cyan()
+        );
+        println!(
+            "{}",
+            "       Lido stVault Consolidation Request Receipt        "
+                .bold()
+                .cyan()
+        );
+        println!(
+            "{}",
+            "=========================================================".cyan()
+        );
     }
 
     // Step 1: Parse Manifest
@@ -50,7 +64,10 @@ async fn main() -> ExitCode {
     if !args.quiet {
         println!("   Found {} consolidation pairs in manifest.", pairs.len());
         println!("⚡ Connecting to Execution Layer RPC: {}", args.el_rpc);
-        println!("📡 Connecting to Consensus Beacon API: {}", args.cl_beacon_api);
+        println!(
+            "📡 Connecting to Consensus Beacon API: {}",
+            args.cl_beacon_api
+        );
     }
 
     // Step 2: Initialize Clients
@@ -83,14 +100,22 @@ async fn main() -> ExitCode {
     let json_str = match generate_json_receipt(&receipt) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("{} Failed to generate JSON receipt: {}", "ERROR:".bold().red(), e);
+            eprintln!(
+                "{} Failed to generate JSON receipt: {}",
+                "ERROR:".bold().red(),
+                e
+            );
             return ExitCode::from(1);
         }
     };
     let csv_str = match generate_csv_receipt(&receipt) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("{} Failed to generate CSV receipt: {}", "ERROR:".bold().red(), e);
+            eprintln!(
+                "{} Failed to generate CSV receipt: {}",
+                "ERROR:".bold().red(),
+                e
+            );
             return ExitCode::from(1);
         }
     };
@@ -99,15 +124,24 @@ async fn main() -> ExitCode {
     if let Err(e) =
         EvidenceWriter::save_all(&args.output_dir, &receipt, &markdown, &json_str, &csv_str)
     {
-        eprintln!("{} Failed to save output files: {}", "WARNING:".bold().yellow(), e);
+        eprintln!(
+            "{} Failed to save output files: {}",
+            "WARNING:".bold().yellow(),
+            e
+        );
     } else if !args.quiet {
-        println!("💾 Receipts saved to directory: {}", args.output_dir.display());
+        println!(
+            "💾 Receipts saved to directory: {}",
+            args.output_dir.display()
+        );
     }
 
     // Step 5: Terminal Output Presentation
     if !args.quiet {
         let mut table = Table::new();
-        table.load_preset(UTF8_FULL).apply_modifier(UTF8_ROUND_CORNERS);
+        table
+            .load_preset(UTF8_FULL)
+            .apply_modifier(UTF8_ROUND_CORNERS);
         table.set_header(vec![
             Cell::new("#").fg(Color::Cyan),
             Cell::new("Source Validator").fg(Color::Cyan),
@@ -126,12 +160,16 @@ async fn main() -> ExitCode {
 
             let src_text = format!(
                 "{} ({})",
-                pair.source_index.map(|i| format!("#{}", i)).unwrap_or_default(),
+                pair.source_index
+                    .map(|i| format!("#{}", i))
+                    .unwrap_or_default(),
                 &pair.source_pubkey[0..10]
             );
             let tgt_text = format!(
                 "{} ({})",
-                pair.target_index.map(|i| format!("#{}", i)).unwrap_or_default(),
+                pair.target_index
+                    .map(|i| format!("#{}", i))
+                    .unwrap_or_default(),
                 &pair.target_pubkey[0..10]
             );
             let tx_text = pair

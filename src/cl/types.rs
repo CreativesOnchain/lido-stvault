@@ -34,7 +34,11 @@ pub struct ValidatorsResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConsolidationRequestItem {
-    #[serde(alias = "source_pubkey", alias = "sourcePubkey", alias = "source_address")]
+    #[serde(
+        alias = "source_pubkey",
+        alias = "sourcePubkey",
+        alias = "source_address"
+    )]
     pub source_pubkey: Option<String>,
     #[serde(alias = "target_pubkey", alias = "targetPubkey")]
     pub target_pubkey: Option<String>,

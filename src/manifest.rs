@@ -74,7 +74,9 @@ pub fn parse_manifest_str(content: &str) -> Result<Vec<ConsolidationPair>> {
     };
 
     if raw_pairs.is_empty() {
-        return Err(AppError::Manifest("Manifest contains zero consolidation pairs".to_string()));
+        return Err(AppError::Manifest(
+            "Manifest contains zero consolidation pairs".to_string(),
+        ));
     }
 
     let mut result = Vec::with_capacity(raw_pairs.len());
@@ -123,8 +125,10 @@ mod tests {
 
     #[test]
     fn test_parse_json_direct_list() {
-        let json =
-            format!(r#"[ {{"source": "{}", "target": "{}"}} ]"#, SAMPLE_SOURCE, SAMPLE_TARGET);
+        let json = format!(
+            r#"[ {{"source": "{}", "target": "{}"}} ]"#,
+            SAMPLE_SOURCE, SAMPLE_TARGET
+        );
         let pairs = parse_manifest_str(&json).expect("should parse");
         assert_eq!(pairs.len(), 1);
         assert_eq!(pairs[0].source_pubkey, SAMPLE_SOURCE.to_lowercase());

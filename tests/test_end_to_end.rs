@@ -97,8 +97,10 @@ async fn test_end_to_end_accepted_workflow() {
         .await;
 
     // Parse manifest
-    let manifest_json =
-        format!(r#"[ {{"source": "{}", "target": "{}"}} ]"#, SAMPLE_SRC, SAMPLE_TGT);
+    let manifest_json = format!(
+        r#"[ {{"source": "{}", "target": "{}"}} ]"#,
+        SAMPLE_SRC, SAMPLE_TGT
+    );
     let pairs = parse_manifest_str(&manifest_json).expect("should parse manifest");
 
     let el_client = ElClient::new(el_server.uri());
@@ -141,7 +143,10 @@ async fn test_end_to_end_accepted_workflow() {
     assert!(temp_dir.path().join("receipt_summary.md").exists());
     assert!(temp_dir.path().join("receipt.json").exists());
     assert!(temp_dir.path().join("consolidations.csv").exists());
-    assert!(temp_dir.path().join("evidence/verification_metadata.json").exists());
+    assert!(temp_dir
+        .path()
+        .join("evidence/verification_metadata.json")
+        .exists());
 }
 
 #[tokio::test]
@@ -193,8 +198,10 @@ async fn test_rejected_consolidation_status() {
         .mount(&cl_server)
         .await;
 
-    let manifest_json =
-        format!(r#"[ {{"source": "{}", "target": "{}"}} ]"#, SAMPLE_SRC, SAMPLE_TGT);
+    let manifest_json = format!(
+        r#"[ {{"source": "{}", "target": "{}"}} ]"#,
+        SAMPLE_SRC, SAMPLE_TGT
+    );
     let pairs = parse_manifest_str(&manifest_json).expect("should parse manifest");
 
     let el_client = ElClient::new(el_server.uri());
@@ -243,8 +250,10 @@ async fn test_indeterminate_when_beacon_unreachable() {
         .mount(&el_server)
         .await;
 
-    let manifest_json =
-        format!(r#"[ {{"source": "{}", "target": "{}"}} ]"#, SAMPLE_SRC, SAMPLE_TGT);
+    let manifest_json = format!(
+        r#"[ {{"source": "{}", "target": "{}"}} ]"#,
+        SAMPLE_SRC, SAMPLE_TGT
+    );
     let pairs = parse_manifest_str(&manifest_json).expect("should parse manifest");
 
     let el_client = ElClient::new(el_server.uri());

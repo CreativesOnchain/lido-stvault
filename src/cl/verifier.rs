@@ -41,24 +41,33 @@ pub async fn verify_consensus_layer(
     }
 
     // 2. Fetch validator indices
-    let validator_indices =
-        client.get_validators_by_pubkeys(&all_pubkeys).await.unwrap_or_default();
+    let validator_indices = client
+        .get_validators_by_pubkeys(&all_pubkeys)
+        .await
+        .unwrap_or_default();
 
     // 3. Fetch Genesis to calculate slot from timestamp
     let genesis_res = client.get_genesis().await.ok();
-    let genesis_time =
-        genesis_res.and_then(|g| g.data.genesis_time.parse::<u64>().ok()).unwrap_or(1606824023); // fallback mainnet genesis if unreachable
+    let genesis_time = genesis_res
+        .and_then(|g| g.data.genesis_time.parse::<u64>().ok())
+        .unwrap_or(1606824023); // fallback mainnet genesis if unreachable
 
     // 4. Fetch pending_consolidations from Beacon head state
-    let pending_consolidations =
-        client.get_pending_consolidations("head").await.unwrap_or_default();
+    let pending_consolidations = client
+        .get_pending_consolidations("head")
+        .await
+        .unwrap_or_default();
 
     let mut beacon_blocks = HashMap::new();
     let mut pair_evidence = HashMap::new();
 
     for pair in pairs {
-        let src_idx = validator_indices.get(&pair.source_pubkey.to_lowercase()).copied();
-        let tgt_idx = validator_indices.get(&pair.target_pubkey.to_lowercase()).copied();
+        let src_idx = validator_indices
+            .get(&pair.source_pubkey.to_lowercase())
+            .copied();
+        let tgt_idx = validator_indices
+            .get(&pair.target_pubkey.to_lowercase())
+            .copied();
 
         // Check pending_consolidations queue
         let mut cl_pending_found = false;
@@ -93,19 +102,20 @@ pub async fn verify_consensus_layer(
                                         && req.target_pubkey.as_deref().map(|s| s.to_lowercase())
                                             == Some(pair.target_pubkey.to_lowercase());
 
-                                let match_indices = if let (Some(s_idx), Some(t_idx)) =
-                                    (src_idx, tgt_idx)
-                                {
-                                    req.source_index.as_deref().and_then(|s| s.parse::<u64>().ok())
-                                        == Some(s_idx)
-                                        && req
-                                            .target_index
+                                let match_indices =
+                                    if let (Some(s_idx), Some(t_idx)) = (src_idx, tgt_idx) {
+                                        req.source_index
                                             .as_deref()
                                             .and_then(|s| s.parse::<u64>().ok())
-                                            == Some(t_idx)
-                                } else {
-                                    false
-                                };
+                                            == Some(s_idx)
+                                            && req
+                                                .target_index
+                                                .as_deref()
+                                                .and_then(|s| s.parse::<u64>().ok())
+                                                == Some(t_idx)
+                                    } else {
+                                        false
+                                    };
 
                                 if match_pubkeys || match_indices {
                                     beacon_request_found = true;

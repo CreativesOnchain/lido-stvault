@@ -30,7 +30,9 @@ pub fn generate_csv_receipt(receipt: &VerificationReceipt) -> Result<String> {
             pair.target_pubkey.clone(),
             pair.target_index.map(|v| v.to_string()).unwrap_or_default(),
             pair.el_tx_hash.clone().unwrap_or_default(),
-            pair.el_block_number.map(|v| v.to_string()).unwrap_or_default(),
+            pair.el_block_number
+                .map(|v| v.to_string())
+                .unwrap_or_default(),
             pair.el_predeploy_found.to_string(),
             pair.beacon_slot.map(|v| v.to_string()).unwrap_or_default(),
             pair.beacon_request_found.to_string(),

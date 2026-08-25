@@ -4,10 +4,22 @@ pub fn generate_markdown_receipt(receipt: &VerificationReceipt) -> String {
     let mut md = String::new();
 
     md.push_str("# Lido stVault Consolidation Request Receipt\n\n");
-    md.push_str(&format!("**Generated At:** {}\n", receipt.timestamp.to_rfc3339()));
-    md.push_str(&format!("**CLI Tool Version:** v{}\n", receipt.tool_version));
-    md.push_str(&format!("**Execution Layer RPC:** `{}`\n", receipt.el_rpc_url));
-    md.push_str(&format!("**Consensus Beacon API:** `{}`\n\n", receipt.cl_beacon_url));
+    md.push_str(&format!(
+        "**Generated At:** {}\n",
+        receipt.timestamp.to_rfc3339()
+    ));
+    md.push_str(&format!(
+        "**CLI Tool Version:** v{}\n",
+        receipt.tool_version
+    ));
+    md.push_str(&format!(
+        "**Execution Layer RPC:** `{}`\n",
+        receipt.el_rpc_url
+    ));
+    md.push_str(&format!(
+        "**Consensus Beacon API:** `{}`\n\n",
+        receipt.cl_beacon_url
+    ));
 
     // Overall Status Banner
     let is_all_accepted =
@@ -32,9 +44,18 @@ pub fn generate_markdown_receipt(receipt: &VerificationReceipt) -> String {
     md.push_str("| Metric | Count | Percentage |\n");
     md.push_str("| :--- | :--- | :--- |\n");
     let total = receipt.summary.total_pairs;
-    let pct = |count: usize| if total > 0 { (count as f64 / total as f64) * 100.0 } else { 0.0 };
+    let pct = |count: usize| {
+        if total > 0 {
+            (count as f64 / total as f64) * 100.0
+        } else {
+            0.0
+        }
+    };
 
-    md.push_str(&format!("| **Total Validator Pairs** | `{}` | `100.0%` |\n", total));
+    md.push_str(&format!(
+        "| **Total Validator Pairs** | `{}` | `100.0%` |\n",
+        total
+    ));
     md.push_str(&format!(
         "| **Accepted (In CL Pending Queue)** | `{}` | `{:.1}%` |\n",
         receipt.summary.accepted,
@@ -60,11 +81,19 @@ pub fn generate_markdown_receipt(receipt: &VerificationReceipt) -> String {
     md.push_str("## 2. Lido Fee-Exemption Role Audit\n\n");
     md.push_str(&format!(
         "- **stVault Dashboard / ACL:** `{}`\n",
-        receipt.fee_exemption.st_vault_dashboard.as_deref().unwrap_or("N/A")
+        receipt
+            .fee_exemption
+            .st_vault_dashboard
+            .as_deref()
+            .unwrap_or("N/A")
     ));
     md.push_str(&format!(
         "- **Operator Address:** `{}`\n",
-        receipt.fee_exemption.operator_address.as_deref().unwrap_or("N/A")
+        receipt
+            .fee_exemption
+            .operator_address
+            .as_deref()
+            .unwrap_or("N/A")
     ));
     md.push_str(&format!(
         "- **`NODE_OPERATOR_FEE_EXEMPT_ROLE` Hash:** `{}`\n",
@@ -76,7 +105,10 @@ pub fn generate_markdown_receipt(receipt: &VerificationReceipt) -> String {
         None => "ℹ️ UNCHECKED / NOT PROVIDED",
     };
     md.push_str(&format!("- **Current Role State:** {}\n", role_status_str));
-    md.push_str(&format!("- **Audit Notes:** {}\n\n", receipt.fee_exemption.notes));
+    md.push_str(&format!(
+        "- **Audit Notes:** {}\n\n",
+        receipt.fee_exemption.notes
+    ));
 
     // Pair-by-pair table
     md.push_str("## 3. Pair-by-Pair Consolidation Verification\n\n");

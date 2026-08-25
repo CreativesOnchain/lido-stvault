@@ -8,7 +8,6 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: "-D warnings"
 
 jobs:
   check-and-lint:
@@ -30,7 +29,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run Clippy Linter
-        run: cargo clippy --all-targets --all-features
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
   test:
     name: Test Suite (${{ matrix.os }})
