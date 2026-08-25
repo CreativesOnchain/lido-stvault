@@ -16,11 +16,16 @@ pub struct BeaconClient {
 }
 
 impl BeaconClient {
-    /// Creates a new Beacon API client with a configured HTTP connection pool and timeout.
+    /// Creates a new Beacon API client with default 30s timeout.
     pub fn new(beacon_url: impl Into<String>) -> Self {
+        Self::with_timeout(beacon_url, Duration::from_secs(30))
+    }
+
+    /// Creates a new Beacon API client with a custom timeout.
+    pub fn with_timeout(beacon_url: impl Into<String>, timeout: Duration) -> Self {
         let trimmed = beacon_url.into().trim_end_matches('/').to_string();
         let http = Client::builder()
-            .timeout(Duration::from_secs(15))
+            .timeout(timeout)
             .pool_idle_timeout(Duration::from_secs(90))
             .build()
             .expect("failed to create reqwest client");

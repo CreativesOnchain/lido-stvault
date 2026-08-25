@@ -10,9 +10,6 @@ use std::collections::{HashMap, HashSet};
 /// Default Ethereum slot duration in seconds (post-Merge / PoS).
 pub const SECONDS_PER_SLOT: u64 = 12;
 
-/// Default Ethereum Mainnet beacon genesis timestamp (Dec 1, 2020 12:00:23 UTC).
-pub const DEFAULT_MAINNET_GENESIS_TIME: u64 = 1606824023;
-
 /// Verifies validator consolidation state across the Consensus Layer (Beacon API).
 pub async fn verify_consensus_layer(
     client: &BeaconClient,
@@ -37,13 +34,12 @@ pub async fn verify_consensus_layer(
         .await
         .unwrap_or_default();
 
-    // Step 3: Fetch Genesis to calculate slot from timestamp
+    // Step 3: Fetch Genesis to calculate slot from timestamp (network-agnostic)
     let genesis_time = client
         .get_genesis()
         .await
         .ok()
-        .and_then(|g| g.data.genesis_time.parse::<u64>().ok())
-        .unwrap_or(DEFAULT_MAINNET_GENESIS_TIME);
+        .and_then(|g| g.data.genesis_time.parse::<u64>().ok());
 
     // Step 4: Fetch pending_consolidations from Beacon head state
     let pending_consolidations = client
@@ -51,13 +47,13 @@ pub async fn verify_consensus_layer(
         .await
         .unwrap_or_default();
 
-    // Step 5: Pre-fetch and cache beacon blocks for all distinct timestamps (avoids duplicate network queries)
-    let beacon_blocks = fetch_beacon_blocks_for_timestamps(
-        client,
-        el_block_timestamps.values().copied(),
-        genesis_time,
-    )
-    .await;
+    // Step 5: Pre-fetch and cache beacon blocks for all distinct timestamps if genesis is known
+    let beacon_blocks = if let Some(genesis) = genesis_time {
+        fetch_beacon_blocks_for_timestamps(client, el_block_timestamps.values().copied(), genesis)
+            .await
+    } else {
+        HashMap::new()
+    };
 
     // Step 6: Evaluate evidence for each pair
     let mut pair_evidence = HashMap::with_capacity(pairs.len());

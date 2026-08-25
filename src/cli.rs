@@ -86,6 +86,10 @@ pub struct CliArgs {
     #[arg(long, value_enum, default_value = "all")]
     pub format: OutputFormat,
 
+    /// HTTP request timeout in seconds (for EL RPC and CL Beacon queries)
+    #[arg(long, default_value_t = 30, value_name = "SECONDS")]
+    pub timeout: u64,
+
     /// Generate shell autocompletions (bash, zsh, fish, powershell, elvish)
     #[arg(long, value_name = "SHELL")]
     pub generate_completions: Option<Shell>,

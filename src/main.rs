@@ -53,8 +53,9 @@ async fn run(args: CliArgs) -> Result<bool, AppError> {
     }
 
     // Step 2: Initialize RPC Clients
-    let el_client = ElClient::new(&args.el_rpc);
-    let beacon_client = BeaconClient::new(&args.cl_beacon_api);
+    let timeout = std::time::Duration::from_secs(args.timeout);
+    let el_client = ElClient::with_timeout(&args.el_rpc, timeout);
+    let beacon_client = BeaconClient::with_timeout(&args.cl_beacon_api, timeout);
 
     // Step 3: Execute Cross-Layer Verification
     let normalized_txs = args.normalized_el_txs();

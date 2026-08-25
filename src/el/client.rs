@@ -11,10 +11,15 @@ pub struct ElClient {
 }
 
 impl ElClient {
-    /// Creates a new Execution Layer JSON-RPC client with a connection pool.
+    /// Creates a new Execution Layer JSON-RPC client with default 30s timeout.
     pub fn new(rpc_url: impl Into<String>) -> Self {
+        Self::with_timeout(rpc_url, Duration::from_secs(30))
+    }
+
+    /// Creates a new Execution Layer JSON-RPC client with a custom timeout.
+    pub fn with_timeout(rpc_url: impl Into<String>, timeout: Duration) -> Self {
         let http = Client::builder()
-            .timeout(Duration::from_secs(15))
+            .timeout(timeout)
             .pool_idle_timeout(Duration::from_secs(90))
             .build()
             .expect("failed to create reqwest client");
