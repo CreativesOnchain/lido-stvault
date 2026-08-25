@@ -1,21 +1,23 @@
 use super::client::ElClient;
 use super::predeploy::ConsolidationPredeploy;
-use super::types::{ElVerificationEvidence, ElVerifiedTx};
+use super::types::{BlockDetails, ElVerificationEvidence, ElVerifiedTx, TxDetails, TxReceipt};
 use crate::error::{AppError, Result};
 use crate::models::ConsolidationPair;
 use std::collections::HashMap;
 
+/// Verifies execution layer transactions, extracts predeploy calls, and matches manifest pairs.
 pub async fn verify_execution_layer(
     client: &ElClient,
     tx_hashes: &[String],
     manifest_pairs: &[ConsolidationPair],
 ) -> Result<ElVerificationEvidence> {
-    let mut verified_txs = HashMap::new();
-    let mut pair_to_tx_map = HashMap::new();
-    let mut raw_receipts = HashMap::new();
-    let mut raw_blocks = HashMap::new();
+    let mut verified_txs = HashMap::with_capacity(tx_hashes.len());
+    let mut pair_to_tx_map = HashMap::with_capacity(manifest_pairs.len());
+    let mut raw_receipts = HashMap::with_capacity(tx_hashes.len());
+    let mut raw_blocks = HashMap::with_capacity(tx_hashes.len());
 
-    for tx_hash in tx_hashes {
+    for (tx_index, tx_hash) in tx_hashes.iter().enumerate() {
+        // 1. Fetch transaction receipt
         let receipt = client
             .get_transaction_receipt(tx_hash)
             .await?
@@ -25,70 +27,21 @@ pub async fn verify_execution_layer(
 
         raw_receipts.insert(tx_hash.clone(), receipt.raw.clone());
 
+        // 2. Fetch transaction input calldata
         let tx_details = client.get_transaction_by_hash(tx_hash).await.ok().flatten();
 
-        let block = client
-            .get_block_by_number(receipt.block_number)
-            .await?
-            .ok_or_else(|| {
-                AppError::ElRpc(format!(
-                    "Block not found for number {}",
-                    receipt.block_number
-                ))
-            })?;
-
+        // 3. Fetch block details (with local caching to avoid duplicate queries for same block)
+        let block = resolve_tx_block(client, &mut raw_blocks, receipt.block_number).await?;
         let block_timestamp = block.timestamp;
-        raw_blocks.insert(receipt.block_number, block);
 
-        // Check if "to" is Predeploy directly or if calldata / logs contain interaction
-        let mut predeploy_interaction = false;
-        if let Some(ref to) = receipt.to
-            && ConsolidationPredeploy::is_predeploy_address(to)
-        {
-            predeploy_interaction = true;
-        }
+        // 4. Detect predeploy interactions and match pairs from calldata
+        let (predeploy_detected, mut matched_pairs) =
+            analyze_tx_interaction(&receipt, tx_details.as_ref(), manifest_pairs);
 
-        // Check logs for predeploy address
-        for log in &receipt.logs {
-            if ConsolidationPredeploy::is_predeploy_address(&log.address) {
-                predeploy_interaction = true;
-            }
-        }
-
-        let mut matched_pairs = Vec::new();
-
-        // Check calldata if available
-        if let Some(ref details) = tx_details {
-            let input_clean = details.input.trim_start_matches("0x");
-            if let Ok(calldata_bytes) = hex::decode(input_clean) {
-                // If direct calldata to predeploy
-                if let Some(direct_pair) =
-                    ConsolidationPredeploy::decode_predeploy_calldata(&calldata_bytes)
-                {
-                    predeploy_interaction = true;
-                    if manifest_pairs.contains(&direct_pair) {
-                        matched_pairs.push(direct_pair);
-                    }
-                } else {
-                    // Match calldata byte patterns against manifest
-                    let matches = ConsolidationPredeploy::match_pairs_in_calldata(
-                        &calldata_bytes,
-                        manifest_pairs,
-                    );
-                    if !matches.is_empty() {
-                        predeploy_interaction = true;
-                        matched_pairs.extend(matches);
-                    }
-                }
-            }
-        }
-
-        // If no direct calldata match was found (e.g. nested contract calls),
-        // but tx succeeded and manifest has exactly 1 pair per tx, associate cautiously
+        // 5. Fallback 1-to-1 association if calldata is nested or obfuscated
         if matched_pairs.is_empty()
             && manifest_pairs.len() == tx_hashes.len()
-            && let Some(idx) = tx_hashes.iter().position(|h| h == tx_hash)
-            && let Some(pair) = manifest_pairs.get(idx)
+            && let Some(pair) = manifest_pairs.get(tx_index)
         {
             matched_pairs.push(pair.clone());
         }
@@ -105,7 +58,7 @@ pub async fn verify_execution_layer(
             block_timestamp,
             from: receipt.from.clone(),
             to: receipt.to.clone(),
-            predeploy_interaction_detected: predeploy_interaction,
+            predeploy_interaction_detected: predeploy_detected,
             matched_manifest_pairs: matched_pairs,
             receipt,
             details: tx_details,
@@ -120,4 +73,111 @@ pub async fn verify_execution_layer(
         raw_receipts,
         raw_blocks,
     })
+}
+
+// -----------------------------------------------------------------------------
+// Helper Functions
+// -----------------------------------------------------------------------------
+
+/// Fetches block details by number or retrieves from the local cache if already fetched.
+async fn resolve_tx_block(
+    client: &ElClient,
+    cache: &mut HashMap<u64, BlockDetails>,
+    block_number: u64,
+) -> Result<BlockDetails> {
+    if let Some(cached) = cache.get(&block_number) {
+        return Ok(cached.clone());
+    }
+
+    let block = client
+        .get_block_by_number(block_number)
+        .await?
+        .ok_or_else(|| AppError::ElRpc(format!("Block not found for number {}", block_number)))?;
+
+    cache.insert(block_number, block.clone());
+    Ok(block)
+}
+
+/// Analyzes receipt logs, target address, and calldata for consolidation predeploy evidence.
+fn analyze_tx_interaction(
+    receipt: &TxReceipt,
+    tx_details: Option<&TxDetails>,
+    manifest_pairs: &[ConsolidationPair],
+) -> (bool, Vec<ConsolidationPair>) {
+    let mut predeploy_found = detect_predeploy_in_receipt(receipt);
+    let mut matched_pairs = Vec::new();
+
+    if let Some(details) = tx_details {
+        let (calldata_predeploy, pairs) =
+            extract_pairs_from_calldata(&details.input, manifest_pairs);
+        if calldata_predeploy {
+            predeploy_found = true;
+        }
+        matched_pairs.extend(pairs);
+    }
+
+    (predeploy_found, matched_pairs)
+}
+
+/// Checks whether the receipt target address or any emitted log addresses match the predeploy.
+fn detect_predeploy_in_receipt(receipt: &TxReceipt) -> bool {
+    let to_is_predeploy = receipt
+        .to
+        .as_deref()
+        .map(ConsolidationPredeploy::is_predeploy_address)
+        .unwrap_or(false);
+
+    let log_matches_predeploy = receipt
+        .logs
+        .iter()
+        .any(|log| ConsolidationPredeploy::is_predeploy_address(&log.address));
+
+    to_is_predeploy || log_matches_predeploy
+}
+
+/// Extracts consolidation pairs from transaction calldata.
+fn extract_pairs_from_calldata(
+    input_hex: &str,
+    manifest_pairs: &[ConsolidationPair],
+) -> (bool, Vec<ConsolidationPair>) {
+    let clean = input_hex.trim().trim_start_matches("0x");
+    let Ok(calldata_bytes) = hex::decode(clean) else {
+        return (false, Vec::new());
+    };
+
+    // Direct 96-byte calldata to predeploy
+    if let Some(direct_pair) = ConsolidationPredeploy::decode_predeploy_calldata(&calldata_bytes) {
+        let matched = if manifest_pairs.contains(&direct_pair) {
+            vec![direct_pair]
+        } else {
+            Vec::new()
+        };
+        return (true, matched);
+    }
+
+    // Byte pattern search within batch/multicall calldata
+    let matches = ConsolidationPredeploy::match_pairs_in_calldata(&calldata_bytes, manifest_pairs);
+    let found = !matches.is_empty();
+    (found, matches)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_detect_predeploy_in_receipt() {
+        let receipt = TxReceipt {
+            transaction_hash: "0x123".to_string(),
+            block_number: 1,
+            block_hash: "0xabc".to_string(),
+            status: true,
+            gas_used: 21000,
+            from: "0xuser".to_string(),
+            to: Some("0x0000bbddc7ce488642fb579f8b00f3a590007251".to_string()),
+            logs: vec![],
+            raw: serde_json::Value::Null,
+        };
+        assert!(detect_predeploy_in_receipt(&receipt));
+    }
 }
