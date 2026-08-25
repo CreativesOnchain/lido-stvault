@@ -280,3 +280,90 @@ async fn test_indeterminate_when_beacon_unreachable() {
         Some("UNRESOLVED_VALIDATOR_OR_PRUNED_STATE")
     );
 }
+
+#[tokio::test]
+async fn test_multi_pair_partial_batch_workflow() {
+    let el_server = MockServer::start().await;
+    let cl_server = MockServer::start().await;
+
+    let tx_hash_1 = "0x1111111111111111111111111111111111111111111111111111111111111111";
+    let tx_hash_2 = "0x2222222222222222222222222222222222222222222222222222222222222222";
+
+    let src_2 = "0xa4a233f81e69b07ef94dd6d9dfd7ab6c7e112d7c07dd5aa9e8a83d3e8e2e92c48858e37ab7b3117562ad846ef3294ee2";
+    let tgt_2 = "0xb5b6e41b9d1bb8bb4be6fb98f6d7ab7b1a206a445e9bb5f5c1d683777d13e3db85be12aa219e27c73ffbb7be2e92c489";
+
+    // 1. Mock EL RPC: eth_getTransactionReceipt for both
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "transactionHash": tx_hash_1,
+                "blockNumber": "0x100",
+                "blockHash": "0xabc",
+                "status": "0x1",
+                "gasUsed": "0x5208",
+                "from": "0xoperator",
+                "to": "0x0000bbddc7ce488642fb579f8b00f3a590007251",
+                "logs": []
+            }
+        })))
+        .mount(&el_server)
+        .await;
+
+    // 2. Mock CL Validators lookup for all 4 pubkeys
+    Mock::given(method("POST"))
+        .and(path("/eth/v1/beacon/states/head/validators"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": [
+                { "index": "101", "status": "active_ongoing", "validator": { "pubkey": SAMPLE_SRC, "withdrawal_credentials": "0x01", "effective_balance": "32000000000", "slashed": false } },
+                { "index": "102", "status": "active_ongoing", "validator": { "pubkey": SAMPLE_TGT, "withdrawal_credentials": "0x01", "effective_balance": "32000000000", "slashed": false } },
+                { "index": "201", "status": "active_ongoing", "validator": { "pubkey": src_2, "withdrawal_credentials": "0x01", "effective_balance": "32000000000", "slashed": false } },
+                { "index": "202", "status": "active_ongoing", "validator": { "pubkey": tgt_2, "withdrawal_credentials": "0x01", "effective_balance": "32000000000", "slashed": false } }
+            ]
+        })))
+        .mount(&cl_server)
+        .await;
+
+    // 3. Mock CL pending_consolidations containing ONLY Pair 1 (Pair 2 is missing!)
+    Mock::given(method("GET"))
+        .and(path("/eth/v1/beacon/states/head/pending_consolidations"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": [
+                { "source_index": "101", "target_index": "102" }
+            ]
+        })))
+        .mount(&cl_server)
+        .await;
+
+    let manifest_json = format!(
+        r#"[
+            {{"source": "{}", "target": "{}"}},
+            {{"source": "{}", "target": "{}"}}
+        ]"#,
+        SAMPLE_SRC, SAMPLE_TGT, src_2, tgt_2
+    );
+    let pairs = parse_manifest_str(&manifest_json).expect("should parse manifest");
+
+    let el_client = ElClient::new(el_server.uri());
+    let beacon_client = BeaconClient::new(cl_server.uri());
+
+    let receipt = VerificationEngine::run_verification(
+        &pairs,
+        &[tx_hash_1.to_string(), tx_hash_2.to_string()],
+        &el_client,
+        &beacon_client,
+        None,
+    )
+    .await
+    .expect("verification should run");
+
+    assert_eq!(receipt.summary.total_pairs, 2);
+    assert_eq!(receipt.summary.accepted, 1);
+    assert_eq!(receipt.summary.not_accepted, 1);
+    assert!(receipt.summary.has_attention_items());
+    assert!(!receipt.summary.is_all_accepted());
+
+    assert_eq!(receipt.pairs[0].status, ConsolidationStatus::Accepted);
+    assert_eq!(receipt.pairs[1].status, ConsolidationStatus::NotAccepted);
+}

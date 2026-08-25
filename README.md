@@ -68,8 +68,8 @@ Every validator pair is deterministically classified into one of four statuses:
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/Lido_stVault.git
-cd Lido_stVault
+git clone https://github.com/CreativesOnchain/lido-stvault.git
+cd lido-stvault
 
 # Build in release mode
 cargo build --release
