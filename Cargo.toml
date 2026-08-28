@@ -1,9 +1,9 @@
 [package]
 name = "stvault-receipt"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
-authors = ["Lido stVault Contributors"]
-description = "High-assurance CLI and library that verifies the post-submission status of Lido stVault validator consolidation requests across Ethereum execution and consensus layers."
+authors = ["CreativesOnchain", "Lido stVault Contributors"]
+description = "CLI tool and library that verifies the post-submission status of Lido stVault validator consolidation requests across Ethereum execution and consensus layers using exact block-level state delta proofs."
 license = "MIT OR Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/CreativesOnchain/lido-stvault"
