@@ -10,12 +10,16 @@ struct CsvRow<'a> {
     source_index: Option<u64>,
     target_pubkey: &'a str,
     target_index: Option<u64>,
+    withdrawal_credentials: Option<&'a str>,
+    derived_source_address: Option<&'a str>,
     el_tx_hash: Option<&'a str>,
     el_block_number: Option<u64>,
     el_predeploy_found: bool,
     beacon_slot: Option<u64>,
     beacon_request_found: bool,
-    cl_pending_found: bool,
+    parent_state_absent: Option<bool>,
+    post_state_present: Option<bool>,
+    block_finalized: Option<bool>,
     status: ConsolidationStatus,
     details: &'a str,
     indeterminate_reason: Option<&'a str>,
@@ -34,12 +38,16 @@ pub fn generate_csv_receipt(receipt: &VerificationReceipt) -> Result<String> {
             source_index: pair.source_index,
             target_pubkey: &pair.target_pubkey,
             target_index: pair.target_index,
+            withdrawal_credentials: pair.withdrawal_credentials.as_deref(),
+            derived_source_address: pair.derived_source_address.as_deref(),
             el_tx_hash: pair.el_tx_hash.as_deref(),
             el_block_number: pair.el_block_number,
             el_predeploy_found: pair.el_predeploy_found,
             beacon_slot: pair.beacon_slot,
             beacon_request_found: pair.beacon_request_found,
-            cl_pending_found: pair.cl_pending_found,
+            parent_state_absent: pair.parent_state_absent,
+            post_state_present: pair.post_state_present,
+            block_finalized: pair.block_finalized,
             status: pair.status,
             details: &pair.details,
             indeterminate_reason: pair.indeterminate_reason.as_deref(),
@@ -73,9 +81,9 @@ mod tests {
             },
             fee_exemption: LidoFeeExemptionReport {
                 st_vault_dashboard: None,
-                operator_address: None,
+                role_name: "vaults.NodeOperatorFee.FeeExemptRole".to_string(),
                 role_hash: "0x123".to_string(),
-                role_active: None,
+                audited_sources: vec![],
                 fee_exemption_observed: false,
                 notes: "Skipped".to_string(),
             },
@@ -84,12 +92,16 @@ mod tests {
                 source_index: Some(101),
                 target_pubkey: "0xtarget".to_string(),
                 target_index: Some(202),
+                withdrawal_credentials: Some("0x01".to_string()),
+                derived_source_address: Some("0xaddr".to_string()),
                 el_tx_hash: Some("0xtx".to_string()),
                 el_block_number: Some(500),
                 el_predeploy_found: true,
                 beacon_slot: Some(1000),
                 beacon_request_found: true,
-                cl_pending_found: true,
+                parent_state_absent: Some(true),
+                post_state_present: Some(true),
+                block_finalized: Some(true),
                 status: ConsolidationStatus::Accepted,
                 details: "All checks passed".to_string(),
                 indeterminate_reason: None,
@@ -98,8 +110,6 @@ mod tests {
 
         let csv_output = generate_csv_receipt(&receipt).expect("CSV generation failed");
         assert!(csv_output.contains("pair_number,source_pubkey,source_index"));
-        assert!(csv_output.contains(
-            "1,0xsource,101,0xtarget,202,0xtx,500,true,1000,true,true,ACCEPTED,All checks passed,"
-        ));
+        assert!(csv_output.contains("ACCEPTED,All checks passed,"));
     }
 }

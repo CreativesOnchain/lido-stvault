@@ -50,7 +50,7 @@ pub struct ConsolidationRequestItem {
     pub target_index: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingConsolidationItem {
     pub source_index: String,
     pub target_index: String,
@@ -59,6 +59,24 @@ pub struct PendingConsolidationItem {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingConsolidationsResponse {
     pub data: Vec<PendingConsolidationItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Checkpoint {
+    pub epoch: String,
+    pub root: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FinalityCheckpointsData {
+    pub previous_justified: Checkpoint,
+    pub current_justified: Checkpoint,
+    pub finalized: Checkpoint,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FinalityCheckpointsResponse {
+    pub data: FinalityCheckpointsData,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -99,15 +117,23 @@ pub struct ClVerifiedPairEvidence {
     pub source_index: Option<u64>,
     pub target_pubkey: String,
     pub target_index: Option<u64>,
+    pub withdrawal_credentials: Option<String>,
+    pub derived_source_address: Option<String>,
     pub beacon_slot: Option<u64>,
     pub beacon_request_found: bool,
-    pub cl_pending_found: bool,
+    pub parent_state_absent: Option<bool>,
+    pub post_state_present: Option<bool>,
+    pub block_finalized: Option<bool>,
+    pub cl_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClVerificationEvidence {
     pub validator_indices: HashMap<String, u64>,
+    pub validator_withdrawal_credentials: HashMap<String, String>,
     pub pair_evidence: HashMap<ConsolidationPair, ClVerifiedPairEvidence>,
-    pub pending_consolidations_queue: Vec<PendingConsolidationItem>,
+    pub parent_states_pending: HashMap<String, Vec<PendingConsolidationItem>>,
+    pub post_states_pending: HashMap<String, Vec<PendingConsolidationItem>>,
     pub beacon_blocks: HashMap<u64, BeaconBlockResponse>,
+    pub finalized_epoch: Option<u64>,
 }

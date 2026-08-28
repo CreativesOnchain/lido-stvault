@@ -38,20 +38,20 @@ impl ConsolidationPredeploy {
         ))
     }
 
-    /// Scans arbitrary calldata (e.g. batch transactions, multicalls, or aggregator wrappers)
-    /// for known manifest source->target pubkey byte sequences using fast byte-slice scanning.
+    /// Scans calldata for exact 96-byte consecutive chunks `[source_pubkey (48B) || target_pubkey (48B)]`.
+    /// Does NOT perform loose independent search.
     pub fn match_pairs_in_calldata(
         calldata: &[u8],
         manifest_pairs: &[ConsolidationPair],
     ) -> Vec<ConsolidationPair> {
-        if calldata.len() < PUBKEY_BYTE_LEN {
+        if calldata.len() < PREDEPLOY_CALLDATA_LEN {
             return Vec::new();
         }
 
         let mut matched = Vec::with_capacity(manifest_pairs.len());
 
         for pair in manifest_pairs {
-            if pair_appears_in_bytes(calldata, pair) {
+            if exact_pair_sequence_in_bytes(calldata, pair) {
                 matched.push(pair.clone());
             }
         }
@@ -60,12 +60,8 @@ impl ConsolidationPredeploy {
     }
 }
 
-// -----------------------------------------------------------------------------
-// Helper Functions
-// -----------------------------------------------------------------------------
-
-/// Checks if a pair's source and target pubkeys appear in the raw calldata bytes.
-fn pair_appears_in_bytes(calldata: &[u8], pair: &ConsolidationPair) -> bool {
+/// Checks if an exact consecutive 96-byte sequence (source ++ target) appears in the calldata bytes.
+fn exact_pair_sequence_in_bytes(calldata: &[u8], pair: &ConsolidationPair) -> bool {
     let src_clean = pair
         .source_pubkey
         .trim_start_matches("0x")
@@ -86,17 +82,11 @@ fn pair_appears_in_bytes(calldata: &[u8], pair: &ConsolidationPair) -> bool {
         return false;
     }
 
-    // 1. Check for exact consecutive 96-byte sequence (source ++ target)
     let mut combined = [0u8; PREDEPLOY_CALLDATA_LEN];
     combined[..PUBKEY_BYTE_LEN].copy_from_slice(&src_bytes);
     combined[PUBKEY_BYTE_LEN..].copy_from_slice(&tgt_bytes);
 
-    if contains_subslice(calldata, &combined) {
-        return true;
-    }
-
-    // 2. Check if both pubkeys appear independently within the calldata
-    contains_subslice(calldata, &src_bytes) && contains_subslice(calldata, &tgt_bytes)
+    contains_subslice(calldata, &combined)
 }
 
 /// Fast search for a needle subslice inside haystack bytes.
@@ -143,13 +133,12 @@ mod tests {
     }
 
     #[test]
-    fn test_match_pairs_in_calldata() {
+    fn test_exact_sequence_matching() {
         let pair = ConsolidationPair::new(
             "0x8a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
             "0x9b0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002",
         );
 
-        // Prepend multicall selector + offset
         let mut calldata = vec![0x12, 0x34, 0x56, 0x78];
         let src_bytes = hex::decode(pair.source_pubkey.trim_start_matches("0x")).unwrap();
         let tgt_bytes = hex::decode(pair.target_pubkey.trim_start_matches("0x")).unwrap();
@@ -160,5 +149,25 @@ mod tests {
             ConsolidationPredeploy::match_pairs_in_calldata(&calldata, std::slice::from_ref(&pair));
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0], pair);
+    }
+
+    #[test]
+    fn test_rejects_loose_non_consecutive_bytes() {
+        let pair = ConsolidationPair::new(
+            "0x8a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
+            "0x9b0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002",
+        );
+
+        // Put source, then some arbitrary filler bytes, then target (NOT consecutive 96 bytes)
+        let mut calldata = vec![0x12, 0x34];
+        let src_bytes = hex::decode(pair.source_pubkey.trim_start_matches("0x")).unwrap();
+        let tgt_bytes = hex::decode(pair.target_pubkey.trim_start_matches("0x")).unwrap();
+        calldata.extend_from_slice(&src_bytes);
+        calldata.extend_from_slice(&[0xff, 0xfe, 0xfd]); // gap
+        calldata.extend_from_slice(&tgt_bytes);
+
+        let matches =
+            ConsolidationPredeploy::match_pairs_in_calldata(&calldata, std::slice::from_ref(&pair));
+        assert_eq!(matches.len(), 0, "Non-consecutive bytes must not match");
     }
 }

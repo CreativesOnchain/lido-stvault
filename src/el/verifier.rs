@@ -16,8 +16,8 @@ pub async fn verify_execution_layer(
     let mut raw_receipts = HashMap::with_capacity(tx_hashes.len());
     let mut raw_blocks = HashMap::with_capacity(tx_hashes.len());
 
-    for (tx_index, tx_hash) in tx_hashes.iter().enumerate() {
-        // 1. Fetch transaction receipt
+    for tx_hash in tx_hashes {
+        // 1. Fetch transaction receipt (fail closed if receipt not found)
         let receipt = client
             .get_transaction_receipt(tx_hash)
             .await?
@@ -28,23 +28,15 @@ pub async fn verify_execution_layer(
         raw_receipts.insert(tx_hash.clone(), receipt.raw.clone());
 
         // 2. Fetch transaction input calldata
-        let tx_details = client.get_transaction_by_hash(tx_hash).await.ok().flatten();
+        let tx_details = client.get_transaction_by_hash(tx_hash).await?;
 
         // 3. Fetch block details (with local caching to avoid duplicate queries for same block)
         let block = resolve_tx_block(client, &mut raw_blocks, receipt.block_number).await?;
         let block_timestamp = block.timestamp;
 
-        // 4. Detect predeploy interactions and match pairs from calldata
-        let (predeploy_detected, mut matched_pairs) =
+        // 4. Detect predeploy interactions and match pairs from exact 96-byte calldata chunks
+        let (predeploy_detected, matched_pairs) =
             analyze_tx_interaction(&receipt, tx_details.as_ref(), manifest_pairs);
-
-        // 5. Fallback 1-to-1 association if calldata is nested or obfuscated
-        if matched_pairs.is_empty()
-            && manifest_pairs.len() == tx_hashes.len()
-            && let Some(pair) = manifest_pairs.get(tx_index)
-        {
-            matched_pairs.push(pair.clone());
-        }
 
         for pair in &matched_pairs {
             pair_to_tx_map.insert(pair.clone(), tx_hash.clone());
@@ -135,7 +127,7 @@ fn detect_predeploy_in_receipt(receipt: &TxReceipt) -> bool {
     to_is_predeploy || log_matches_predeploy
 }
 
-/// Extracts consolidation pairs from transaction calldata.
+/// Extracts consolidation pairs from transaction calldata using exact 96-byte chunk matching.
 fn extract_pairs_from_calldata(
     input_hex: &str,
     manifest_pairs: &[ConsolidationPair],
@@ -155,7 +147,7 @@ fn extract_pairs_from_calldata(
         return (true, matched);
     }
 
-    // Byte pattern search within batch/multicall calldata
+    // Byte pattern search within batch/multicall calldata for exact 96-byte sequences
     let matches = ConsolidationPredeploy::match_pairs_in_calldata(&calldata_bytes, manifest_pairs);
     let found = !matches.is_empty();
     (found, matches)

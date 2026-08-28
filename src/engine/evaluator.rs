@@ -26,23 +26,33 @@ impl VerificationEngine {
         let el_evidence = verify_execution_layer(el_client, tx_hashes, manifest_pairs).await?;
         let el_block_timestamps = extract_el_block_timestamps(&el_evidence);
 
-        // Step 2: Execute Consensus Layer verification
+        // Step 2: Execute Consensus Layer state delta verification
         let cl_evidence =
             verify_consensus_layer(beacon_client, manifest_pairs, &el_block_timestamps).await?;
 
-        // Step 3: Extract operator address from the first valid EL transaction
-        let operator_address = el_evidence
+        // Step 3: Extract withdrawal credentials for every source validator
+        let mut source_credentials = HashMap::with_capacity(manifest_pairs.len());
+        for pair in manifest_pairs {
+            let src_norm = pair.source_pubkey.to_lowercase();
+            let creds = cl_evidence
+                .validator_withdrawal_credentials
+                .get(&src_norm)
+                .cloned();
+            source_credentials.insert(src_norm, creds);
+        }
+
+        let receipts: Vec<_> = el_evidence
             .verified_txs
             .values()
-            .next()
-            .map(|tx| tx.from.as_str());
+            .map(|v| v.receipt.clone())
+            .collect();
 
-        // Step 4: Check Lido fee exemption role
-        let fee_exemption = LidoRoleInspector::check_fee_exempt_role(
+        // Step 4: Audit Lido fee exemption role for derived accounts
+        let fee_exemption = LidoRoleInspector::check_fee_exempt_roles(
             el_client,
             st_vault_dashboard,
-            operator_address,
-            !el_evidence.verified_txs.is_empty(),
+            &source_credentials,
+            &receipts,
         )
         .await?;
 
@@ -84,7 +94,7 @@ fn extract_el_block_timestamps(el_evidence: &ElVerificationEvidence) -> HashMap<
     map
 }
 
-/// Builds a `PairVerificationResult` by cross-referencing execution and consensus evidence.
+/// Builds a `PairVerificationResult` by cross-referencing execution and consensus state delta evidence.
 fn build_pair_verification_result(
     pair: &ConsolidationPair,
     el_evidence: &ElVerificationEvidence,
@@ -98,9 +108,13 @@ fn build_pair_verification_result(
     let cl_pair = cl_evidence.pair_evidence.get(pair);
     let source_index = cl_pair.and_then(|c| c.source_index);
     let target_index = cl_pair.and_then(|c| c.target_index);
+    let withdrawal_credentials = cl_pair.and_then(|c| c.withdrawal_credentials.clone());
+    let derived_source_address = cl_pair.and_then(|c| c.derived_source_address.clone());
     let beacon_slot = cl_pair.and_then(|c| c.beacon_slot);
     let beacon_request_found = cl_pair.map(|c| c.beacon_request_found).unwrap_or(false);
-    let cl_pending_found = cl_pair.map(|c| c.cl_pending_found).unwrap_or(false);
+    let parent_state_absent = cl_pair.and_then(|c| c.parent_state_absent);
+    let post_state_present = cl_pair.and_then(|c| c.post_state_present);
+    let block_finalized = cl_pair.and_then(|c| c.block_finalized);
 
     let (status, details, indeterminate_reason) = evaluate_pair_status(el_tx, cl_pair);
 
@@ -109,6 +123,8 @@ fn build_pair_verification_result(
         source_index,
         target_pubkey: pair.target_pubkey.clone(),
         target_index,
+        withdrawal_credentials,
+        derived_source_address,
         el_tx_hash,
         el_block_number: el_tx.map(|t| t.block_number),
         el_predeploy_found: el_tx
@@ -116,7 +132,9 @@ fn build_pair_verification_result(
             .unwrap_or(false),
         beacon_slot,
         beacon_request_found,
-        cl_pending_found,
+        parent_state_absent,
+        post_state_present,
+        block_finalized,
         status,
         details,
         indeterminate_reason,
@@ -128,64 +146,118 @@ pub fn evaluate_pair_status(
     el_tx: Option<&ElVerifiedTx>,
     cl_pair: Option<&ClVerifiedPairEvidence>,
 ) -> (ConsolidationStatus, String, Option<String>) {
-    let cl_pending_found = cl_pair.map(|c| c.cl_pending_found).unwrap_or(false);
-    let beacon_request_found = cl_pair.map(|c| c.beacon_request_found).unwrap_or(false);
-    let source_index = cl_pair.and_then(|c| c.source_index);
-    let target_index = cl_pair.and_then(|c| c.target_index);
-
-    match (el_tx, cl_pair) {
-        // Case: EL tx is missing
-        (None, _) => (
+    let Some(tx) = el_tx else {
+        return (
             ConsolidationStatus::Indeterminate,
             "No corresponding execution layer transaction could be matched with this consolidation pair.".to_string(),
             Some("MISSING_EL_TRANSACTION".to_string()),
-        ),
+        );
+    };
 
-        // Case: EL tx reverted on-chain
-        (Some(tx), _) if !tx.status_success => (
+    if !tx.status_success {
+        return (
             ConsolidationStatus::NotAccepted,
-            format!("Execution layer transaction '{}' reverted on-chain (status = 0).", tx.tx_hash),
-            None,
-        ),
-
-        // Case: EL succeeded and CL pending consolidation found
-        (Some(tx), Some(_cl)) if cl_pending_found => (
-            ConsolidationStatus::Accepted,
             format!(
-                "Request confirmed in EL tx '{}' (block {}) and accepted into Consensus pending_consolidations queue.",
-                tx.tx_hash, tx.block_number
-            ),
-            None,
-        ),
-
-        // Case: EL succeeded and beacon request seen in block body (awaiting state transition)
-        (Some(tx), Some(_cl)) if beacon_request_found => (
-            ConsolidationStatus::Queued,
-            format!(
-                "Request confirmed in EL tx '{}' and included in Beacon Block body, awaiting consensus state transition.",
+                "Execution layer transaction '{}' reverted on-chain (status = 0).",
                 tx.tx_hash
             ),
             None,
-        ),
+        );
+    }
 
-        // Case: EL succeeded and validator indices exist, but request is missing from consensus queue
-        (Some(tx), Some(_cl)) if source_index.is_some() && target_index.is_some() => (
-            ConsolidationStatus::NotAccepted,
-            format!(
-                "EL tx '{}' succeeded, but consolidation request was not found in the Consensus Layer pending queue.",
-                tx.tx_hash
-            ),
-            None,
-        ),
-
-        // Case: Indices could not be resolved or beacon state is pruned/unreachable
-        (Some(tx), _) => (
+    let Some(cl) = cl_pair else {
+        return (
             ConsolidationStatus::Indeterminate,
             format!(
-                "EL tx '{}' succeeded, but Consensus Layer validator indices or state could not be verified.",
+                "Consensus layer evidence unavailable for pair with EL tx '{}'.",
                 tx.tx_hash
             ),
-            Some("UNRESOLVED_VALIDATOR_OR_PRUNED_STATE".to_string()),
+            Some("MISSING_CL_EVIDENCE".to_string()),
+        );
+    };
+
+    if let Some(ref err) = cl.cl_error {
+        return (
+            ConsolidationStatus::Indeterminate,
+            format!("Consensus layer verification could not complete: {}.", err),
+            Some(err.clone()),
+        );
+    }
+
+    if cl.source_index.is_none() || cl.target_index.is_none() {
+        return (
+            ConsolidationStatus::Indeterminate,
+            format!(
+                "Could not resolve validator indices on Consensus Layer for EL tx '{}'.",
+                tx.tx_hash
+            ),
+            Some("UNRESOLVED_VALIDATOR_INDICES".to_string()),
+        );
+    }
+
+    // Exact state delta verification logic
+    match (
+        cl.beacon_request_found,
+        cl.parent_state_absent,
+        cl.post_state_present,
+        cl.block_finalized,
+    ) {
+        // Case 1: Exact proof of inclusion, delta transition (absent before, present after), and finalized block -> ACCEPTED
+        (true, Some(true), Some(true), Some(true)) => (
+            ConsolidationStatus::Accepted,
+            format!(
+                "Verified: Request included in finalized Beacon block (slot {}) and proven newly transitioned (absent in parent state, present in post state).",
+                cl.beacon_slot.unwrap_or_default()
+            ),
+            None,
+        ),
+
+        // Case 2: In block, newly transitioned, but not yet finalized -> QUEUED
+        (true, Some(true), Some(true), Some(false)) => (
+            ConsolidationStatus::Queued,
+            format!(
+                "Request included in Beacon block (slot {}) and queued in post state, awaiting block finalization.",
+                cl.beacon_slot.unwrap_or_default()
+            ),
+            None,
+        ),
+
+        // Case 3: In block, but state was already pending in parent state (pre-existing pair, not newly accepted by this block)
+        (true, Some(false), Some(true), _) => (
+            ConsolidationStatus::Queued,
+            format!(
+                "Consolidation pair was already present in parent state prior to Beacon slot {}; request is queued.",
+                cl.beacon_slot.unwrap_or_default()
+            ),
+            None,
+        ),
+
+        // Case 4: Request was in block execution requests, but absent in post state -> CL REJECTION (failed validation rules during block execution)
+        (true, Some(true), Some(false), _) => (
+            ConsolidationStatus::NotAccepted,
+            format!(
+                "Request was included in Beacon block (slot {}), but was rejected during block state transition (absent in post state).",
+                cl.beacon_slot.unwrap_or_default()
+            ),
+            None,
+        ),
+
+        // Case 5: Request not found in the estimated beacon block body
+        (false, _, _, _) => (
+            ConsolidationStatus::Queued,
+            format!(
+                "EL tx '{}' succeeded, but request has not yet appeared in subsequent Beacon block bodies; awaiting block proposer inclusion.",
+                tx.tx_hash
+            ),
+            None,
+        ),
+
+        // Default fail-closed
+        _ => (
+            ConsolidationStatus::Indeterminate,
+            "State delta proof could not be definitively evaluated from Consensus Layer data."
+                .to_string(),
+            Some("INCONCLUSIVE_STATE_DELTA".to_string()),
         ),
     }
 }
@@ -203,7 +275,7 @@ mod tests {
             block_hash: "0xabc".to_string(),
             block_timestamp: 1700000000,
             from: "0xoperator".to_string(),
-            to: Some("0xpredeploy".to_string()),
+            to: Some("0x0000bbddc7ce488642fb579f8b00f3a590007251".to_string()),
             predeploy_interaction_detected: true,
             matched_manifest_pairs: vec![],
             receipt: TxReceipt {
@@ -213,7 +285,7 @@ mod tests {
                 status: success,
                 gas_used: 21000,
                 from: "0xoperator".to_string(),
-                to: Some("0xpredeploy".to_string()),
+                to: Some("0x0000bbddc7ce488642fb579f8b00f3a590007251".to_string()),
                 logs: vec![],
                 raw: serde_json::Value::Null,
             },
@@ -222,68 +294,71 @@ mod tests {
     }
 
     fn mock_cl_evidence(
-        pending: bool,
         beacon_req: bool,
-        has_indices: bool,
+        parent_absent: Option<bool>,
+        post_present: Option<bool>,
+        finalized: Option<bool>,
     ) -> ClVerifiedPairEvidence {
         ClVerifiedPairEvidence {
             source_pubkey: "0x01".to_string(),
-            source_index: if has_indices { Some(10) } else { None },
+            source_index: Some(10),
             target_pubkey: "0x02".to_string(),
-            target_index: if has_indices { Some(20) } else { None },
+            target_index: Some(20),
+            withdrawal_credentials: Some(
+                "0x0100000000000000000000001111111111111111111111111111111111111111".to_string(),
+            ),
+            derived_source_address: Some("0x1111111111111111111111111111111111111111".to_string()),
             beacon_slot: Some(500),
             beacon_request_found: beacon_req,
-            cl_pending_found: pending,
+            parent_state_absent: parent_absent,
+            post_state_present: post_present,
+            block_finalized: finalized,
+            cl_error: None,
         }
     }
 
     #[test]
-    fn test_status_missing_el_tx() {
-        let (status, _, reason) = evaluate_pair_status(None, None);
-        assert_eq!(status, ConsolidationStatus::Indeterminate);
-        assert_eq!(reason.as_deref(), Some("MISSING_EL_TRANSACTION"));
-    }
-
-    #[test]
-    fn test_status_el_reverted() {
-        let el_tx = mock_el_tx(false);
-        let (status, _, _) = evaluate_pair_status(Some(&el_tx), None);
-        assert_eq!(status, ConsolidationStatus::NotAccepted);
-    }
-
-    #[test]
-    fn test_status_accepted_when_pending_found() {
+    fn test_status_accepted_with_exact_state_delta_and_finality() {
         let el_tx = mock_el_tx(true);
-        let cl = mock_cl_evidence(true, false, true);
+        let cl = mock_cl_evidence(true, Some(true), Some(true), Some(true));
         let (status, _, _) = evaluate_pair_status(Some(&el_tx), Some(&cl));
         assert_eq!(status, ConsolidationStatus::Accepted);
     }
 
     #[test]
-    fn test_status_queued_when_beacon_request_found() {
+    fn test_status_queued_when_not_yet_finalized() {
         let el_tx = mock_el_tx(true);
-        let cl = mock_cl_evidence(false, true, true);
+        let cl = mock_cl_evidence(true, Some(true), Some(true), Some(false));
         let (status, _, _) = evaluate_pair_status(Some(&el_tx), Some(&cl));
         assert_eq!(status, ConsolidationStatus::Queued);
     }
 
     #[test]
-    fn test_status_not_accepted_when_indices_exist_but_not_in_queue() {
+    fn test_status_not_accepted_when_rejected_in_post_state() {
         let el_tx = mock_el_tx(true);
-        let cl = mock_cl_evidence(false, false, true);
+        let cl = mock_cl_evidence(true, Some(true), Some(false), Some(true));
         let (status, _, _) = evaluate_pair_status(Some(&el_tx), Some(&cl));
         assert_eq!(status, ConsolidationStatus::NotAccepted);
     }
 
     #[test]
-    fn test_status_indeterminate_when_indices_missing() {
+    fn test_status_queued_when_pre_existing_in_parent_state() {
         let el_tx = mock_el_tx(true);
-        let cl = mock_cl_evidence(false, false, false);
+        let cl = mock_cl_evidence(true, Some(false), Some(true), Some(true));
+        let (status, _, _) = evaluate_pair_status(Some(&el_tx), Some(&cl));
+        assert_eq!(status, ConsolidationStatus::Queued);
+    }
+
+    #[test]
+    fn test_status_indeterminate_when_state_pruned() {
+        let el_tx = mock_el_tx(true);
+        let mut cl = mock_cl_evidence(true, None, None, None);
+        cl.cl_error = Some("HISTORICAL_STATE_PRUNED_OR_UNAVAILABLE".to_string());
         let (status, _, reason) = evaluate_pair_status(Some(&el_tx), Some(&cl));
         assert_eq!(status, ConsolidationStatus::Indeterminate);
         assert_eq!(
             reason.as_deref(),
-            Some("UNRESOLVED_VALIDATOR_OR_PRUNED_STATE")
+            Some("HISTORICAL_STATE_PRUNED_OR_UNAVAILABLE")
         );
     }
 }

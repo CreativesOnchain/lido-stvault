@@ -1,6 +1,7 @@
 use serde_json::json;
+use std::collections::HashMap;
 use stvault_receipt::ElClient;
-use stvault_receipt::lido::{LidoRoleInspector, node_operator_fee_exempt_role_hash};
+use stvault_receipt::lido::{LidoRoleInspector, lido_fee_exempt_role_hash};
 use wiremock::matchers::method;
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -22,19 +23,23 @@ async fn test_lido_fee_exempt_role_active() {
 
     let el_client = ElClient::new(el_server.uri());
     let dashboard_addr = "0x1234567890123456789012345678901234567890";
-    let operator_addr = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
+    let pubkey = "0x8a9233f81e69b07ef94dd6d9dfd7ab6c7e112d7c07dd5aa9e8a83d3e8e2e92c48858e37ab7b3117562ad846ef3294ee1";
+    let creds = "0x01000000000000000000000070997970C51812dc3A010C7d01b50e0d17dc79C8";
 
-    let report = LidoRoleInspector::check_fee_exempt_role(
+    let mut source_credentials = HashMap::new();
+    source_credentials.insert(pubkey.to_string(), Some(creds.to_string()));
+
+    let report = LidoRoleInspector::check_fee_exempt_roles(
         &el_client,
         Some(dashboard_addr),
-        Some(operator_addr),
-        true,
+        &source_credentials,
+        &[],
     )
     .await
     .expect("should check role");
 
-    assert_eq!(report.role_active, Some(true));
-    assert_eq!(report.role_hash, node_operator_fee_exempt_role_hash());
+    assert!(report.is_any_role_active());
+    assert_eq!(report.role_hash, lido_fee_exempt_role_hash());
     assert!(report.notes.contains("WARNING"));
 }
 
@@ -56,17 +61,21 @@ async fn test_lido_fee_exempt_role_inactive() {
 
     let el_client = ElClient::new(el_server.uri());
     let dashboard_addr = "0x1234567890123456789012345678901234567890";
-    let operator_addr = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
+    let pubkey = "0x8a9233f81e69b07ef94dd6d9dfd7ab6c7e112d7c07dd5aa9e8a83d3e8e2e92c48858e37ab7b3117562ad846ef3294ee1";
+    let creds = "0x01000000000000000000000070997970C51812dc3A010C7d01b50e0d17dc79C8";
 
-    let report = LidoRoleInspector::check_fee_exempt_role(
+    let mut source_credentials = HashMap::new();
+    source_credentials.insert(pubkey.to_string(), Some(creds.to_string()));
+
+    let report = LidoRoleInspector::check_fee_exempt_roles(
         &el_client,
         Some(dashboard_addr),
-        Some(operator_addr),
-        true,
+        &source_credentials,
+        &[],
     )
     .await
     .expect("should check role");
 
-    assert_eq!(report.role_active, Some(false));
+    assert!(!report.is_any_role_active());
     assert!(report.notes.contains("NOT active"));
 }

@@ -1,0 +1,13 @@
+{
+  "network": "hoodi",
+  "consensus_fork": "electra",
+  "execution_fork": "prague",
+  "predeploy_address": "0x0000bbddc7ce488642fb579f8b00f3a590007251",
+  "supported_endpoints": [
+    "/eth/v1/beacon/genesis",
+    "/eth/v1/beacon/states/{state_id}/validators",
+    "/eth/v1/beacon/states/{state_id}/finality_checkpoints",
+    "/eth/v1/beacon/states/{state_id}/pending_consolidations",
+    "/eth/v2/beacon/blocks/{block_id}"
+  ]
+}

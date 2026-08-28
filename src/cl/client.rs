@@ -1,6 +1,6 @@
 use super::types::{
-    BeaconBlockResponse, GenesisResponse, PendingConsolidationItem, PendingConsolidationsResponse,
-    ValidatorData, ValidatorsResponse,
+    BeaconBlockResponse, FinalityCheckpointsResponse, GenesisResponse, PendingConsolidationItem,
+    PendingConsolidationsResponse, ValidatorData, ValidatorsResponse,
 };
 use crate::error::{AppError, Result};
 use reqwest::{Client, Response, StatusCode};
@@ -45,16 +45,13 @@ impl BeaconClient {
         self.get_json("/eth/v1/beacon/genesis").await
     }
 
-    /// Queries validator indices for a batch of public keys.
-    ///
-    /// Attempts `POST /eth/v1/beacon/states/head/validators` with body payload first;
-    /// falls back to `GET /eth/v1/beacon/states/head/validators?id=...` if POST is not supported.
+    /// Queries validator details (indices and withdrawal credentials) for a batch of public keys.
     pub async fn get_validators_by_pubkeys(
         &self,
         pubkeys: &[String],
-    ) -> Result<HashMap<String, u64>> {
+    ) -> Result<(HashMap<String, u64>, HashMap<String, String>)> {
         if pubkeys.is_empty() {
-            return Ok(HashMap::new());
+            return Ok((HashMap::new(), HashMap::new()));
         }
 
         // Primary path: POST /eth/v1/beacon/states/head/validators
@@ -63,14 +60,23 @@ impl BeaconClient {
             .post_json::<ValidatorsResponse, _>("/eth/v1/beacon/states/head/validators", &payload)
             .await
         {
-            return Ok(parse_validator_indices(parsed.data));
+            return Ok(parse_validator_details(parsed.data));
         }
 
         // Fallback path: GET with comma-separated pubkeys
         let ids_param = pubkeys.join(",");
         let path = format!("/eth/v1/beacon/states/head/validators?id={}", ids_param);
         let parsed: ValidatorsResponse = self.get_json(&path).await?;
-        Ok(parse_validator_indices(parsed.data))
+        Ok(parse_validator_details(parsed.data))
+    }
+
+    /// Fetches finality checkpoints for a given state (e.g. "head").
+    pub async fn get_finality_checkpoints(
+        &self,
+        state_id: &str,
+    ) -> Result<FinalityCheckpointsResponse> {
+        let path = format!("/eth/v1/beacon/states/{}/finality_checkpoints", state_id);
+        self.get_json(&path).await
     }
 
     /// Fetches a signed beacon block by slot number or block ID (e.g. "head", "finalized", or slot number).
@@ -79,7 +85,7 @@ impl BeaconClient {
         self.get_json_opt(&path).await
     }
 
-    /// Fetches the pending consolidations queue from state (requires EIP-7251 / Electra support).
+    /// Fetches the pending consolidations queue from a specific state (e.g. slot number, state root, or "head").
     pub async fn get_pending_consolidations(
         &self,
         state_id: &str,
@@ -89,7 +95,7 @@ impl BeaconClient {
 
         if resp.status() == StatusCode::NOT_FOUND {
             return Err(AppError::ClBeacon(format!(
-                "Beacon endpoint '{}{}' returned 404 Not Found (endpoint requires EIP-7251/Electra/Pectra support)",
+                "Beacon endpoint '{}{}' returned 404 Not Found (state may be pruned or endpoint requires EIP-7251 support)",
                 self.base_url, path
             )));
         }
@@ -179,14 +185,19 @@ impl BeaconClient {
     }
 }
 
-/// Helper function to parse and map validator data into a pubkey -> index lookup map.
-fn parse_validator_indices(data: Vec<ValidatorData>) -> HashMap<String, u64> {
-    let mut map = HashMap::with_capacity(data.len());
+/// Helper function to parse and map validator data into pubkey -> index and pubkey -> withdrawal_credentials maps.
+fn parse_validator_details(
+    data: Vec<ValidatorData>,
+) -> (HashMap<String, u64>, HashMap<String, String>) {
+    let mut indices = HashMap::with_capacity(data.len());
+    let mut credentials = HashMap::with_capacity(data.len());
+
     for item in data {
+        let pubkey_norm = item.validator.pubkey.to_lowercase();
         if let Ok(idx) = item.index.parse::<u64>() {
-            let pubkey_norm = item.validator.pubkey.to_lowercase();
-            map.insert(pubkey_norm, idx);
+            indices.insert(pubkey_norm.clone(), idx);
         }
+        credentials.insert(pubkey_norm, item.validator.withdrawal_credentials);
     }
-    map
+    (indices, credentials)
 }

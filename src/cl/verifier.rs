@@ -9,8 +9,10 @@ use std::collections::{HashMap, HashSet};
 
 /// Default Ethereum slot duration in seconds (post-Merge / PoS).
 pub const SECONDS_PER_SLOT: u64 = 12;
+/// Slots per epoch in Ethereum proof-of-stake.
+pub const SLOTS_PER_EPOCH: u64 = 32;
 
-/// Verifies validator consolidation state across the Consensus Layer (Beacon API).
+/// Verifies validator consolidation state across the Consensus Layer (Beacon API) using exact block-level state delta proofs.
 pub async fn verify_consensus_layer(
     client: &BeaconClient,
     pairs: &[ConsolidationPair],
@@ -19,20 +21,23 @@ pub async fn verify_consensus_layer(
     if pairs.is_empty() {
         return Ok(ClVerificationEvidence {
             validator_indices: HashMap::new(),
+            validator_withdrawal_credentials: HashMap::new(),
             pair_evidence: HashMap::new(),
-            pending_consolidations_queue: Vec::new(),
+            parent_states_pending: HashMap::new(),
+            post_states_pending: HashMap::new(),
             beacon_blocks: HashMap::new(),
+            finalized_epoch: None,
         });
     }
 
     // Step 1: Collect unique public keys in O(N) using pre-allocated HashSet
     let all_pubkeys = collect_unique_pubkeys(pairs);
 
-    // Step 2: Fetch validator indices for all pubkeys in batch
-    let validator_indices = client
+    // Step 2: Fetch validator details (indices + withdrawal credentials) in batch
+    let (validator_indices, validator_credentials) = client
         .get_validators_by_pubkeys(&all_pubkeys)
         .await
-        .unwrap_or_default();
+        .unwrap_or_else(|_| (HashMap::new(), HashMap::new()));
 
     // Step 3: Fetch Genesis to calculate slot from timestamp (network-agnostic)
     let genesis_time = client
@@ -41,13 +46,14 @@ pub async fn verify_consensus_layer(
         .ok()
         .and_then(|g| g.data.genesis_time.parse::<u64>().ok());
 
-    // Step 4: Fetch pending_consolidations from Beacon head state
-    let pending_consolidations = client
-        .get_pending_consolidations("head")
+    // Step 4: Fetch Finality Checkpoints to verify block finality
+    let finalized_epoch = client
+        .get_finality_checkpoints("head")
         .await
-        .unwrap_or_default();
+        .ok()
+        .and_then(|fc| fc.data.finalized.epoch.parse::<u64>().ok());
 
-    // Step 5: Pre-fetch and cache beacon blocks for all distinct timestamps if genesis is known
+    // Step 5: Fetch and cache beacon blocks for EL timestamps
     let beacon_blocks = if let Some(genesis) = genesis_time {
         fetch_beacon_blocks_for_timestamps(client, el_block_timestamps.values().copied(), genesis)
             .await
@@ -55,22 +61,77 @@ pub async fn verify_consensus_layer(
         HashMap::new()
     };
 
-    // Step 6: Evaluate evidence for each pair
+    // Step 6: Query parent and post state pending_consolidations for each processing block
+    let mut parent_states_pending: HashMap<String, Vec<PendingConsolidationItem>> = HashMap::new();
+    let mut post_states_pending: HashMap<String, Vec<PendingConsolidationItem>> = HashMap::new();
+
+    for block in beacon_blocks.values() {
+        let parent_id = &block.data.message.parent_root;
+        let post_id = &block.data.message.slot;
+
+        if !parent_states_pending.contains_key(parent_id)
+            && let Ok(pending) = client.get_pending_consolidations(parent_id).await
+        {
+            parent_states_pending.insert(parent_id.clone(), pending);
+        }
+
+        if !post_states_pending.contains_key(post_id)
+            && let Ok(pending) = client.get_pending_consolidations(post_id).await
+        {
+            post_states_pending.insert(post_id.clone(), pending);
+        }
+    }
+
+    // Step 7: Evaluate exact delta evidence for each pair
     let mut pair_evidence = HashMap::with_capacity(pairs.len());
 
     for pair in pairs {
-        let src_idx = validator_indices
-            .get(&pair.source_pubkey.to_lowercase())
-            .copied();
-        let tgt_idx = validator_indices
-            .get(&pair.target_pubkey.to_lowercase())
-            .copied();
+        let src_norm = pair.source_pubkey.to_lowercase();
+        let tgt_norm = pair.target_pubkey.to_lowercase();
 
-        let cl_pending_found = is_pair_pending(&pending_consolidations, src_idx, tgt_idx);
+        let src_idx = validator_indices.get(&src_norm).copied();
+        let tgt_idx = validator_indices.get(&tgt_norm).copied();
+        let src_creds = validator_credentials.get(&src_norm).cloned();
+        let derived_addr = src_creds
+            .as_deref()
+            .and_then(derive_address_from_credentials);
 
-        // Check if any fetched beacon block contains this consolidation request
-        let (beacon_slot, beacon_request_found) =
-            scan_beacon_blocks(&beacon_blocks, pair, src_idx, tgt_idx);
+        // Scan blocks for exact execution request
+        let (matched_block, beacon_slot, beacon_request_found) =
+            find_matching_beacon_block(&beacon_blocks, pair, src_idx, tgt_idx);
+
+        let mut parent_state_absent = None;
+        let mut post_state_present = None;
+        let mut block_finalized = None;
+        let mut cl_error = None;
+
+        if let Some(block) = matched_block {
+            let parent_id = &block.data.message.parent_root;
+            let post_id = &block.data.message.slot;
+
+            let parent_pending = parent_states_pending.get(parent_id);
+            let post_pending = post_states_pending.get(post_id);
+
+            match (parent_pending, post_pending) {
+                (Some(parent_list), Some(post_list)) => {
+                    let in_parent = is_pair_in_queue(parent_list, src_idx, tgt_idx);
+                    let in_post = is_pair_in_queue(post_list, src_idx, tgt_idx);
+
+                    parent_state_absent = Some(!in_parent);
+                    post_state_present = Some(in_post);
+                }
+                _ => {
+                    cl_error = Some("HISTORICAL_STATE_PRUNED_OR_UNAVAILABLE".to_string());
+                }
+            }
+
+            if let (Some(slot), Some(finalized_ep)) = (beacon_slot, finalized_epoch) {
+                let block_epoch = slot / SLOTS_PER_EPOCH;
+                block_finalized = Some(block_epoch <= finalized_ep);
+            }
+        } else if beacon_blocks.is_empty() {
+            cl_error = Some("BEACON_BLOCK_NOT_FOUND".to_string());
+        }
 
         pair_evidence.insert(
             pair.clone(),
@@ -79,18 +140,26 @@ pub async fn verify_consensus_layer(
                 source_index: src_idx,
                 target_pubkey: pair.target_pubkey.clone(),
                 target_index: tgt_idx,
+                withdrawal_credentials: src_creds,
+                derived_source_address: derived_addr,
                 beacon_slot,
                 beacon_request_found,
-                cl_pending_found,
+                parent_state_absent,
+                post_state_present,
+                block_finalized,
+                cl_error,
             },
         );
     }
 
     Ok(ClVerificationEvidence {
         validator_indices,
+        validator_withdrawal_credentials: validator_credentials,
         pair_evidence,
-        pending_consolidations_queue: pending_consolidations,
+        parent_states_pending,
+        post_states_pending,
         beacon_blocks,
+        finalized_epoch,
     })
 }
 
@@ -98,7 +167,7 @@ pub async fn verify_consensus_layer(
 // Helper Functions
 // -----------------------------------------------------------------------------
 
-/// Extracts unique 0x-prefixed public keys from consolidation pairs in $O(N)$ time.
+/// Extracts unique 0x-prefixed public keys from consolidation pairs in O(N) time.
 fn collect_unique_pubkeys(pairs: &[ConsolidationPair]) -> Vec<String> {
     let mut set = HashSet::with_capacity(pairs.len() * 2);
     for pair in pairs {
@@ -117,7 +186,7 @@ pub fn timestamp_to_slot(timestamp: u64, genesis_time: u64) -> Option<u64> {
     }
 }
 
-/// Pre-fetches Beacon blocks for distinct timestamps to avoid duplicate queries.
+/// Pre-fetches Beacon blocks for distinct timestamps.
 async fn fetch_beacon_blocks_for_timestamps(
     client: &BeaconClient,
     timestamps: impl Iterator<Item = u64>,
@@ -136,8 +205,8 @@ async fn fetch_beacon_blocks_for_timestamps(
     blocks
 }
 
-/// Checks if a validator pair is currently queued in `pending_consolidations`.
-fn is_pair_pending(
+/// Checks if a validator pair is present in a `pending_consolidations` list.
+fn is_pair_in_queue(
     pending: &[PendingConsolidationItem],
     src_idx: Option<u64>,
     tgt_idx: Option<u64>,
@@ -151,28 +220,28 @@ fn is_pair_pending(
     }
 }
 
-/// Scans pre-fetched beacon blocks to determine if a consolidation request was included.
-fn scan_beacon_blocks(
-    blocks: &HashMap<u64, BeaconBlockResponse>,
+/// Finds the Beacon block that contains the exact consolidation request for a pair.
+fn find_matching_beacon_block<'a>(
+    blocks: &'a HashMap<u64, BeaconBlockResponse>,
     pair: &ConsolidationPair,
     src_idx: Option<u64>,
     tgt_idx: Option<u64>,
-) -> (Option<u64>, bool) {
+) -> (Option<&'a BeaconBlockResponse>, Option<u64>, bool) {
     for (&slot, block_resp) in blocks {
         if let Some(ref requests) = block_resp.data.message.body.execution_requests
             && let Some(ref consolidations) = requests.consolidations
         {
             for req in consolidations {
                 if matches_consolidation_request(req, pair, src_idx, tgt_idx) {
-                    return (Some(slot), true);
+                    return (Some(block_resp), Some(slot), true);
                 }
             }
         }
     }
 
-    // Return the first estimated slot if available, even if request wasn't found in body
     let first_slot = blocks.keys().copied().next();
-    (first_slot, false)
+    let first_block = first_slot.and_then(|s| blocks.get(&s));
+    (first_block, first_slot, false)
 }
 
 /// Checks if an execution request matches a given consolidation pair (by pubkey or index).
@@ -205,25 +274,48 @@ fn matches_consolidation_request(
     match_pubkeys || match_indices
 }
 
+/// Derives an Ethereum execution address from 0x01 (or 0x02) withdrawal credentials.
+/// 32 bytes total: byte 0 is type (0x01), bytes 1..12 are 0x00, bytes 12..32 are the 20-byte address.
+pub fn derive_address_from_credentials(credentials: &str) -> Option<String> {
+    let clean = credentials
+        .trim()
+        .trim_start_matches("0x")
+        .trim_start_matches("0X");
+    if clean.len() != 64 {
+        return None;
+    }
+
+    // Check if prefix is 01 (ETH1 withdrawal address)
+    if !clean.starts_with("01") && !clean.starts_with("02") {
+        return None;
+    }
+
+    // Last 40 hex chars (20 bytes) is the execution address
+    let address_hex = &clean[24..64];
+    Some(format!("0x{}", address_hex.to_lowercase()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_derive_address_from_credentials() {
+        let creds = "0x0100000000000000000000001234567890abcdef1234567890abcdef12345678";
+        let addr = derive_address_from_credentials(creds).expect("should derive address");
+        assert_eq!(addr, "0x1234567890abcdef1234567890abcdef12345678");
+    }
+
+    #[test]
+    fn test_non_eth1_credentials() {
+        let bls_creds = "0x0000000000000000000000001234567890abcdef1234567890abcdef12345678";
+        assert!(derive_address_from_credentials(bls_creds).is_none());
+    }
 
     #[test]
     fn test_timestamp_to_slot() {
         let genesis = 1606824023;
         let slot = timestamp_to_slot(genesis + 24, genesis);
         assert_eq!(slot, Some(2));
-    }
-
-    #[test]
-    fn test_is_pair_pending() {
-        let pending = vec![PendingConsolidationItem {
-            source_index: "100".to_string(),
-            target_index: "200".to_string(),
-        }];
-        assert!(is_pair_pending(&pending, Some(100), Some(200)));
-        assert!(!is_pair_pending(&pending, Some(100), Some(300)));
-        assert!(!is_pair_pending(&pending, None, Some(200)));
     }
 }

@@ -38,18 +38,19 @@ pub fn normalize_pubkey(pubkey: &str) -> String {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ConsolidationStatus {
-    /// Request verified in EL, included in Beacon block, and accepted into CL `pending_consolidations` queue.
+    /// Exact request proven included in a finalized Beacon block and newly transitioned
+    /// (absent in parent state, present in post state).
     Accepted,
-    /// Request submitted on EL and/or included in Beacon block, awaiting CL state update.
+    /// Request verified on EL and/or Beacon block, pending consensus epoch processing/finalization.
     Queued,
-    /// Request was dropped or rejected by consensus rules.
+    /// Request failed consensus validation rules or was rejected during block execution.
     NotAccepted,
-    /// Status cannot be verified with certainty (e.g. missing EL receipt, pruned Beacon state).
+    /// Status cannot be verified with certainty (e.g. historical state pruned, endpoint unsupported, missing receipt).
     Indeterminate,
 }
 
 impl ConsolidationStatus {
-    /// Returns `true` if the request is definitively confirmed in the consensus pending queue.
+    /// Returns `true` if the request is definitively confirmed by state delta proof.
     pub fn is_accepted(self) -> bool {
         matches!(self, Self::Accepted)
     }
@@ -88,26 +89,48 @@ pub struct PairVerificationResult {
     pub source_index: Option<u64>,
     pub target_pubkey: String,
     pub target_index: Option<u64>,
+    pub withdrawal_credentials: Option<String>,
+    pub derived_source_address: Option<String>,
     pub el_tx_hash: Option<String>,
     pub el_block_number: Option<u64>,
     pub el_predeploy_found: bool,
     pub beacon_slot: Option<u64>,
     pub beacon_request_found: bool,
-    pub cl_pending_found: bool,
+    pub parent_state_absent: Option<bool>,
+    pub post_state_present: Option<bool>,
+    pub block_finalized: Option<bool>,
     pub status: ConsolidationStatus,
     pub details: String,
     pub indeterminate_reason: Option<String>,
 }
 
-/// Status report for Lido's `NODE_OPERATOR_FEE_EXEMPT_ROLE`.
+/// Audit report for a specific source validator's derived withdrawal credential account.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceFeeAudit {
+    pub source_pubkey: String,
+    pub withdrawal_credentials: Option<String>,
+    pub derived_address: Option<String>,
+    pub role_active: Option<bool>,
+}
+
+/// Status report for Lido's `vaults.NodeOperatorFee.FeeExemptRole`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LidoFeeExemptionReport {
     pub st_vault_dashboard: Option<String>,
-    pub operator_address: Option<String>,
+    pub role_name: String,
     pub role_hash: String,
-    pub role_active: Option<bool>,
+    pub audited_sources: Vec<SourceFeeAudit>,
     pub fee_exemption_observed: bool,
     pub notes: String,
+}
+
+impl LidoFeeExemptionReport {
+    /// Returns `true` if any audited source validator address currently has the role active.
+    pub fn is_any_role_active(&self) -> bool {
+        self.audited_sources
+            .iter()
+            .any(|s| s.role_active == Some(true))
+    }
 }
 
 /// Overall verification summary metrics.

@@ -1,0 +1,28 @@
+{
+  "version": "electra",
+  "data": {
+    "message": {
+      "slot": "100",
+      "proposer_index": "42",
+      "parent_root": "0x1111111111111111111111111111111111111111111111111111111111111111",
+      "state_root": "0x2222222222222222222222222222222222222222222222222222222222222222",
+      "body": {
+        "execution_payload": {
+          "block_number": "100",
+          "block_hash": "0x6f5e4d3c2b1a0987654321fedcba0987654321fedcba0987654321fedcba0987"
+        },
+        "execution_requests": {
+          "consolidations": [
+            {
+              "source_pubkey": "0x8a9233f81e69b07ef94dd6d9dfd7ab6c7e112d7c07dd5aa9e8a83d3e8e2e92c48858e37ab7b3117562ad846ef3294ee1",
+              "target_pubkey": "0x96b6e41b9d1bb8bb4be6fb98f6d7ab7b1a206a445e9bb5f5c1d683777d13e3db85be12aa219e27c73ffbb7be2e92c488",
+              "source_index": "1001",
+              "target_index": "2001"
+            }
+          ]
+        }
+      }
+    },
+    "signature": "0x1234"
+  }
+}

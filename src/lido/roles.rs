@@ -1,86 +1,130 @@
 use crate::el::client::ElClient;
+use crate::el::types::TxReceipt;
 use crate::error::Result;
-use crate::models::LidoFeeExemptionReport;
+use crate::models::{LidoFeeExemptionReport, SourceFeeAudit};
 use alloy_primitives::keccak256;
+use std::collections::HashMap;
 
 /// OpenZeppelin AccessControl `hasRole(bytes32,address)` 4-byte selector (`0x91d14854`).
 pub const HAS_ROLE_SELECTOR: &str = "91d14854";
 
-/// Lido role name for operator fee exemption.
-pub const NODE_OPERATOR_FEE_EXEMPT_ROLE_NAME: &str = "NODE_OPERATOR_FEE_EXEMPT_ROLE";
+/// Lido exact role name for operator fee exemption.
+pub const LIDO_FEE_EXEMPT_ROLE_NAME: &str = "vaults.NodeOperatorFee.FeeExemptRole";
 
-/// Computes the keccak256 role hash for `"NODE_OPERATOR_FEE_EXEMPT_ROLE"`.
-pub fn node_operator_fee_exempt_role_hash() -> String {
-    let hash = keccak256(NODE_OPERATOR_FEE_EXEMPT_ROLE_NAME.as_bytes());
+/// Computes the keccak256 role hash for `"vaults.NodeOperatorFee.FeeExemptRole"`.
+pub fn lido_fee_exempt_role_hash() -> String {
+    let hash = keccak256(LIDO_FEE_EXEMPT_ROLE_NAME.as_bytes());
     format!("0x{}", hex::encode(hash))
 }
 
 pub struct LidoRoleInspector;
 
 impl LidoRoleInspector {
-    /// Checks whether the specified operator account currently holds `NODE_OPERATOR_FEE_EXEMPT_ROLE`
-    /// on the stVault Dashboard or Lido ACL contract.
-    pub async fn check_fee_exempt_role(
+    /// Audits `vaults.NodeOperatorFee.FeeExemptRole` for each unique account derived from
+    /// each source validator's withdrawal credentials.
+    pub async fn check_fee_exempt_roles(
         el_client: &ElClient,
         contract_address: Option<&str>,
-        operator_address: Option<&str>,
-        fee_exemption_observed: bool,
+        source_credentials: &HashMap<String, Option<String>>,
+        receipts: &[TxReceipt],
     ) -> Result<LidoFeeExemptionReport> {
-        let role_hash = node_operator_fee_exempt_role_hash();
+        let role_hash = lido_fee_exempt_role_hash();
+        let role_name = LIDO_FEE_EXEMPT_ROLE_NAME.to_string();
+
+        let fee_exemption_observed = detect_fee_exemption_events(contract_address, receipts);
 
         let Some(contract) = contract_address.map(str::trim).filter(|s| !s.is_empty()) else {
+            let audited_sources = source_credentials
+                .iter()
+                .map(|(pubkey, creds)| {
+                    let derived = creds
+                        .as_deref()
+                        .and_then(crate::cl::verifier::derive_address_from_credentials);
+                    SourceFeeAudit {
+                        source_pubkey: pubkey.clone(),
+                        withdrawal_credentials: creds.clone(),
+                        derived_address: derived,
+                        role_active: None,
+                    }
+                })
+                .collect();
+
             return Ok(LidoFeeExemptionReport {
                 st_vault_dashboard: None,
-                operator_address: operator_address.map(ToString::to_string),
+                role_name,
                 role_hash,
-                role_active: None,
+                audited_sources,
                 fee_exemption_observed,
                 notes: "stVault Dashboard / ACL address was not provided; fee exemption role inspection skipped.".to_string(),
             });
         };
 
-        let Some(operator) = operator_address.map(str::trim).filter(|s| !s.is_empty()) else {
-            return Ok(LidoFeeExemptionReport {
-                st_vault_dashboard: Some(contract.to_string()),
-                operator_address: None,
-                role_hash,
-                role_active: None,
-                fee_exemption_observed,
-                notes:
-                    "Operator address was not provided; cannot query hasRole on stVault Dashboard."
-                        .to_string(),
+        // Cache role lookups per derived address to avoid redundant RPC calls
+        let mut address_role_cache: HashMap<String, Option<bool>> = HashMap::new();
+        let mut audited_sources = Vec::with_capacity(source_credentials.len());
+
+        for (pubkey, creds) in source_credentials {
+            let derived = creds
+                .as_deref()
+                .and_then(crate::cl::verifier::derive_address_from_credentials);
+
+            let role_active = if let Some(ref addr) = derived {
+                if let Some(&cached) = address_role_cache.get(addr) {
+                    cached
+                } else {
+                    let is_active = query_has_role(el_client, contract, &role_hash, addr).await;
+                    address_role_cache.insert(addr.clone(), is_active);
+                    is_active
+                }
+            } else {
+                None
+            };
+
+            audited_sources.push(SourceFeeAudit {
+                source_pubkey: pubkey.clone(),
+                withdrawal_credentials: creds.clone(),
+                derived_address: derived,
+                role_active,
             });
+        }
+
+        let any_active = audited_sources.iter().any(|s| s.role_active == Some(true));
+
+        let notes = if any_active {
+            "WARNING: vaults.NodeOperatorFee.FeeExemptRole is currently ACTIVE on one or more source validator accounts. Ensure it is revoked after consolidation workflow completes."
+        } else {
+            "vaults.NodeOperatorFee.FeeExemptRole is NOT active on audited source validator accounts (revoked or never granted)."
         };
 
-        let calldata = encode_has_role_calldata(&role_hash, operator);
-
-        match el_client.eth_call(contract, &calldata).await {
-            Ok(ret) => {
-                let is_active = parse_bool_return(&ret);
-                Ok(LidoFeeExemptionReport {
-                    st_vault_dashboard: Some(contract.to_string()),
-                    operator_address: Some(operator.to_string()),
-                    role_hash,
-                    role_active: Some(is_active),
-                    fee_exemption_observed,
-                    notes: role_status_message(is_active).to_string(),
-                })
-            }
-            Err(e) => Ok(LidoFeeExemptionReport {
-                st_vault_dashboard: Some(contract.to_string()),
-                operator_address: Some(operator.to_string()),
-                role_hash,
-                role_active: None,
-                fee_exemption_observed,
-                notes: format!("Failed to query hasRole on contract '{}': {}", contract, e),
-            }),
-        }
+        Ok(LidoFeeExemptionReport {
+            st_vault_dashboard: Some(contract.to_string()),
+            role_name,
+            role_hash,
+            audited_sources,
+            fee_exemption_observed,
+            notes: notes.to_string(),
+        })
     }
 }
 
 // -----------------------------------------------------------------------------
 // Helper Functions
 // -----------------------------------------------------------------------------
+
+/// Queries `hasRole(bytes32,address)` for a specific address.
+async fn query_has_role(
+    el_client: &ElClient,
+    contract: &str,
+    role_hash: &str,
+    address: &str,
+) -> Option<bool> {
+    let calldata = encode_has_role_calldata(role_hash, address);
+    el_client
+        .eth_call(contract, &calldata)
+        .await
+        .ok()
+        .map(|ret| parse_bool_return(&ret))
+}
 
 /// Encodes ABI calldata for `hasRole(bytes32,address)`:
 /// - 4 bytes: `0x91d14854`
@@ -109,18 +153,36 @@ pub fn parse_bool_return(output_hex: &str) -> bool {
     clean.trim_start_matches('0') == "1"
 }
 
-/// Returns a descriptive note based on the active role state.
-fn role_status_message(is_active: bool) -> &'static str {
-    if is_active {
-        "WARNING: Temporary NODE_OPERATOR_FEE_EXEMPT_ROLE is currently ACTIVE. Ensure it is revoked if consolidation workflow is finished."
-    } else {
-        "NODE_OPERATOR_FEE_EXEMPT_ROLE is NOT active (revoked or never granted)."
+/// Checks if any receipt explicitly targeted the Dashboard or emitted fee exemption logs.
+fn detect_fee_exemption_events(dashboard_addr: Option<&str>, receipts: &[TxReceipt]) -> bool {
+    let Some(dashboard) = dashboard_addr else {
+        return false;
+    };
+    let dash_clean = dashboard.trim().to_lowercase();
+
+    for receipt in receipts {
+        if receipt.to.as_deref().map(|s| s.to_lowercase()) == Some(dash_clean.clone()) {
+            return true;
+        }
+        for log in &receipt.logs {
+            if log.address.to_lowercase() == dash_clean {
+                return true;
+            }
+        }
     }
+    false
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_role_hash_computation() {
+        let hash = lido_fee_exempt_role_hash();
+        assert!(hash.starts_with("0x"));
+        assert_eq!(hash.len(), 66);
+    }
 
     #[test]
     fn test_encode_has_role_calldata() {

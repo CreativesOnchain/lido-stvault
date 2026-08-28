@@ -42,7 +42,7 @@ fn render_status_banner(md: &mut String, receipt: &VerificationReceipt) {
         let _ = writeln!(md, "> **STATUS: ALL CONSOLIDATION REQUESTS ACCEPTED**");
         let _ = writeln!(
             md,
-            "> All consolidation pairs have been verified in the Consensus Layer pending queue.\n"
+            "> All consolidation pairs have been proven included in finalized Beacon blocks and transitioned across state delta queues.\n"
         );
     } else if receipt.summary.has_attention_items() {
         let _ = writeln!(md, "> [!WARNING]");
@@ -75,19 +75,19 @@ fn render_summary_metrics(md: &mut String, receipt: &VerificationReceipt) {
     let _ = writeln!(md, "| **Total Validator Pairs** | `{}` | `100.0%` |", total);
     let _ = writeln!(
         md,
-        "| **Accepted (In CL Pending Queue)** | `{}` | `{:.1}%` |",
+        "| **Accepted (Delta Proven & Finalized)** | `{}` | `{:.1}%` |",
         receipt.summary.accepted,
         pct(receipt.summary.accepted)
     );
     let _ = writeln!(
         md,
-        "| **Queued (Awaiting CL State)** | `{}` | `{:.1}%` |",
+        "| **Queued (In Block / Pending Finality)** | `{}` | `{:.1}%` |",
         receipt.summary.queued,
         pct(receipt.summary.queued)
     );
     let _ = writeln!(
         md,
-        "| **Not Accepted / Dropped** | `{}` | `{:.1}%` |",
+        "| **Not Accepted / CL Rejected** | `{}` | `{:.1}%` |",
         receipt.summary.not_accepted,
         pct(receipt.summary.not_accepted)
     );
@@ -110,51 +110,88 @@ fn render_fee_exemption_audit(md: &mut String, receipt: &VerificationReceipt) {
             .as_deref()
             .unwrap_or("N/A")
     );
-    let _ = writeln!(
-        md,
-        "- **Operator Address:** `{}`",
-        receipt
-            .fee_exemption
-            .operator_address
-            .as_deref()
-            .unwrap_or("N/A")
-    );
-    let _ = writeln!(
-        md,
-        "- **`NODE_OPERATOR_FEE_EXEMPT_ROLE` Hash:** `{}`",
-        receipt.fee_exemption.role_hash
-    );
+    let _ = writeln!(md, "- **Role Name:** `{}`", receipt.fee_exemption.role_name);
+    let _ = writeln!(md, "- **Role Hash:** `{}`", receipt.fee_exemption.role_hash);
 
-    let role_status_str = match receipt.fee_exemption.role_active {
-        Some(true) => "⚠️ ACTIVE (Elevated privilege active)",
-        Some(false) => "✅ INACTIVE (Revoked or clean)",
-        None => "ℹ️ UNCHECKED / NOT PROVIDED",
-    };
-    let _ = writeln!(md, "- **Current Role State:** {}", role_status_str);
-    let _ = writeln!(md, "- **Audit Notes:** {}\n", receipt.fee_exemption.notes);
+    if !receipt.fee_exemption.audited_sources.is_empty() {
+        let _ = writeln!(
+            md,
+            "\n### Audited Source Validator Accounts (Derived from Withdrawal Credentials)\n"
+        );
+        let _ = writeln!(
+            md,
+            "| Source Pubkey | Withdrawal Credentials | Derived Account | Role Active |"
+        );
+        let _ = writeln!(md, "| :--- | :--- | :--- | :--- |");
+
+        for src in &receipt.fee_exemption.audited_sources {
+            let short_key = if src.source_pubkey.len() > 14 {
+                format!(
+                    "`{}...{}`",
+                    &src.source_pubkey[..8],
+                    &src.source_pubkey[src.source_pubkey.len() - 6..]
+                )
+            } else {
+                format!("`{}`", src.source_pubkey)
+            };
+
+            let creds = src.withdrawal_credentials.as_deref().unwrap_or("N/A");
+            let addr = src.derived_address.as_deref().unwrap_or("N/A");
+            let status = match src.role_active {
+                Some(true) => "⚠️ ACTIVE",
+                Some(false) => "✅ INACTIVE",
+                None => "ℹ️ UNCHECKED",
+            };
+
+            let _ = writeln!(
+                md,
+                "| {} | `{}` | `{}` | {} |",
+                short_key, creds, addr, status
+            );
+        }
+    }
+
+    let _ = writeln!(md, "\n- **Audit Notes:** {}\n", receipt.fee_exemption.notes);
 }
 
 fn render_pairs_table(md: &mut String, pairs: &[PairVerificationResult]) {
     let _ = writeln!(md, "## 3. Pair-by-Pair Consolidation Verification\n");
     let _ = writeln!(
         md,
-        "| # | Source Validator | Target Validator | EL Tx Hash | Status | Details |"
+        "| # | Source Validator | Target Validator | EL Tx Hash | Beacon Slot | State Delta | Status | Details |"
     );
-    let _ = writeln!(md, "| :- | :--- | :--- | :--- | :--- | :--- |");
+    let _ = writeln!(
+        md,
+        "| :- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |"
+    );
 
     for (i, pair) in pairs.iter().enumerate() {
         let src_display = format_validator_display(&pair.source_pubkey, pair.source_index);
         let tgt_display = format_validator_display(&pair.target_pubkey, pair.target_index);
         let tx_display = format_tx_hash_short(pair.el_tx_hash.as_deref());
+        let slot_display = pair
+            .beacon_slot
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "N/A".to_string());
+
+        let delta_display = match (pair.parent_state_absent, pair.post_state_present) {
+            (Some(true), Some(true)) => "Verified (0 -> 1)",
+            (Some(false), Some(true)) => "Pre-existing (1 -> 1)",
+            (Some(true), Some(false)) => "Rejected (0 -> 0)",
+            _ => "Unverified",
+        };
+
         let status_badge = status_badge_markdown(pair.status);
 
         let _ = writeln!(
             md,
-            "| {} | {} | {} | {} | {} | {} |",
+            "| {} | {} | {} | {} | `{}` | `{}` | {} | {} |",
             i + 1,
             src_display,
             tgt_display,
             tx_display,
+            slot_display,
+            delta_display,
             status_badge,
             pair.details
         );
@@ -215,9 +252,9 @@ mod tests {
             },
             fee_exemption: LidoFeeExemptionReport {
                 st_vault_dashboard: None,
-                operator_address: None,
+                role_name: "vaults.NodeOperatorFee.FeeExemptRole".to_string(),
                 role_hash: "0x123".to_string(),
-                role_active: Some(false),
+                audited_sources: vec![],
                 fee_exemption_observed: true,
                 notes: "Clean".to_string(),
             },
@@ -226,12 +263,21 @@ mod tests {
                 source_index: Some(123),
                 target_pubkey: "0x0a090807060504030201".to_string(),
                 target_index: Some(456),
+                withdrawal_credentials: Some(
+                    "0x0100000000000000000000001234567890abcdef1234567890abcdef12345678"
+                        .to_string(),
+                ),
+                derived_source_address: Some(
+                    "0x1234567890abcdef1234567890abcdef12345678".to_string(),
+                ),
                 el_tx_hash: Some("0x11223344556677889900aabbccddeeff".to_string()),
                 el_block_number: Some(100),
                 el_predeploy_found: true,
                 beacon_slot: Some(200),
                 beacon_request_found: true,
-                cl_pending_found: true,
+                parent_state_absent: Some(true),
+                post_state_present: Some(true),
+                block_finalized: Some(true),
                 status: ConsolidationStatus::Accepted,
                 details: "Verified in queue".to_string(),
                 indeterminate_reason: None,

@@ -8,6 +8,28 @@ const PUBKEY_C: &str = "0xa4a233f81e69b07ef94dd6d9dfd7ab6c7e112d7c07dd5aa9e8a83d
 const PUBKEY_D: &str = "0xb5b6e41b9d1bb8bb4be6fb98f6d7ab7b1a206a445e9bb5f5c1d683777d13e3db85be12aa219e27c73ffbb7be2e92c489";
 
 #[test]
+fn test_parse_official_lido_target_map_file() {
+    let mut file = NamedTempFile::new().unwrap();
+    let content = format!(
+        r#"{{
+            "{}": [
+                "{}",
+                "{}"
+            ]
+        }}"#,
+        PUBKEY_B, PUBKEY_A, PUBKEY_C
+    );
+    file.write_all(content.as_bytes()).unwrap();
+
+    let pairs = parse_manifest_file(file.path()).expect("should parse official format");
+    assert_eq!(pairs.len(), 2);
+    assert_eq!(pairs[0].source_pubkey, PUBKEY_A.to_lowercase());
+    assert_eq!(pairs[0].target_pubkey, PUBKEY_B.to_lowercase());
+    assert_eq!(pairs[1].source_pubkey, PUBKEY_C.to_lowercase());
+    assert_eq!(pairs[1].target_pubkey, PUBKEY_B.to_lowercase());
+}
+
+#[test]
 fn test_parse_multi_pair_json_manifest_file() {
     let mut file = NamedTempFile::new().unwrap();
     let content = format!(

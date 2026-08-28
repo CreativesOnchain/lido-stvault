@@ -1,0 +1,49 @@
+{
+  "tool_version": "0.1.0",
+  "timestamp": "2026-08-28T12:00:00Z",
+  "el_rpc_url": "https://rpc.hoodi.ethpandaops.io",
+  "cl_beacon_url": "https://bn.hoodi.ethpandaops.io",
+  "summary": {
+    "total_pairs": 1,
+    "accepted": 1,
+    "queued": 0,
+    "not_accepted": 0,
+    "indeterminate": 0
+  },
+  "fee_exemption": {
+    "st_vault_dashboard": "0x1234567890123456789012345678901234567890",
+    "role_name": "vaults.NodeOperatorFee.FeeExemptRole",
+    "role_hash": "0x4b78c430e3860bb4f7ae2274479e0be62810d7a6e1471bbefdff1f17faecaa95",
+    "audited_sources": [
+      {
+        "source_pubkey": "0x8a9233f81e69b07ef94dd6d9dfd7ab6c7e112d7c07dd5aa9e8a83d3e8e2e92c48858e37ab7b3117562ad846ef3294ee1",
+        "withdrawal_credentials": "0x0100000000000000000000001234567890123456789012345678901234567890",
+        "derived_address": "0x1234567890123456789012345678901234567890",
+        "role_active": false
+      }
+    ],
+    "fee_exemption_observed": false,
+    "notes": "vaults.NodeOperatorFee.FeeExemptRole is NOT active on audited source validator accounts (revoked or never granted)."
+  },
+  "pairs": [
+    {
+      "source_pubkey": "0x8a9233f81e69b07ef94dd6d9dfd7ab6c7e112d7c07dd5aa9e8a83d3e8e2e92c48858e37ab7b3117562ad846ef3294ee1",
+      "source_index": 1001,
+      "target_pubkey": "0x96b6e41b9d1bb8bb4be6fb98f6d7ab7b1a206a445e9bb5f5c1d683777d13e3db85be12aa219e27c73ffbb7be2e92c488",
+      "target_index": 2001,
+      "withdrawal_credentials": "0x0100000000000000000000001234567890123456789012345678901234567890",
+      "derived_source_address": "0x1234567890123456789012345678901234567890",
+      "el_tx_hash": "0x4a2a33f81e69b07ef94dd6d9dfd7ab6c7e112d7c07dd5aa9e8a83d3e8e2e92c4",
+      "el_block_number": 100,
+      "el_predeploy_found": true,
+      "beacon_slot": 100,
+      "beacon_request_found": true,
+      "parent_state_absent": true,
+      "post_state_present": true,
+      "block_finalized": true,
+      "status": "ACCEPTED",
+      "details": "Verified: Request included in finalized Beacon block (slot 100) and proven newly transitioned (absent in parent state, present in post state).",
+      "indeterminate_reason": null
+    }
+  ]
+}

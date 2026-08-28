@@ -95,10 +95,10 @@ pub fn print_verification_results(receipt: &VerificationReceipt) {
         receipt.summary.indeterminate.to_string().magenta(),
     );
 
-    if let Some(true) = receipt.fee_exemption.role_active {
+    if receipt.fee_exemption.is_any_role_active() {
         println!(
             "\n{}",
-            "⚠️  WARNING: NODE_OPERATOR_FEE_EXEMPT_ROLE is currently ACTIVE on stVault Dashboard."
+            "⚠️  WARNING: vaults.NodeOperatorFee.FeeExemptRole is currently ACTIVE on one or more source validator accounts."
                 .bold()
                 .yellow()
         );
