@@ -2,7 +2,7 @@
 name = "stvault-receipt"
 version = "0.2.0"
 edition = "2024"
-authors = ["CreativesOnchain", "Lido stVault Contributors"]
+authors = ["Creatives Onchain", "Lido stVault Contributors"]
 description = "CLI tool and library that verifies the post-submission status of Lido stVault validator consolidation requests across Ethereum execution and consensus layers using exact block-level state delta proofs."
 license = "MIT OR Apache-2.0"
 readme = "README.md"
@@ -29,7 +29,10 @@ indicatif = "0.17"
 
 # Async & Networking
 tokio = { version = "1.53", features = ["full"] }
-reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+reqwest = { version = "0.12", features = [
+    "json",
+    "rustls-tls",
+], default-features = false }
 url = "2.5"
 
 # Ethereum & Alloy
