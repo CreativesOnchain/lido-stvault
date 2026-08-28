@@ -5,10 +5,10 @@
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
 [![CI](https://github.com/CreativesOnchain/lido-stvault/actions/workflows/ci.yml/badge.svg)](https://github.com/CreativesOnchain/lido-stvault/actions/workflows/ci.yml)
 
+A read-only CLI tool and Rust library that verifies the post-submission status of Lido stVault validator consolidation requests across Ethereum's **Execution Layer (EL)** and **Consensus Layer (CL)** without relying on proprietary indexers, private endpoints, or commercial APIs.
+
 > [!NOTE]
 > **Community Prototype Disclaimer:** `stvault-receipt` is an unofficial community prototype developed to demonstrate cross-layer verification of validator consolidation requests for Lido stVault deployments. It is provided for evaluation and testing purposes and is not an official Lido DAO release.
-
-A read-only CLI tool and Rust library that verifies the post-submission status of Lido stVault validator consolidation requests across Ethereum's **Execution Layer (EL)** and **Consensus Layer (CL)** without relying on proprietary indexers, private endpoints, or commercial APIs.
 
 ---
 
