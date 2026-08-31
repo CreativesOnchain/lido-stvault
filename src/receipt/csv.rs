@@ -106,6 +106,7 @@ mod tests {
                 details: "All checks passed".to_string(),
                 indeterminate_reason: None,
             }],
+            raw_evidence: None,
         };
 
         let csv_output = generate_csv_receipt(&receipt).expect("CSV generation failed");

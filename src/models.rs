@@ -174,6 +174,17 @@ impl VerificationSummary {
     }
 }
 
+use std::collections::HashMap;
+
+/// Raw JSON evidence artifacts captured from Execution and Consensus Layer RPCs.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RawEvidenceArtifacts {
+    pub el_receipts: HashMap<String, serde_json::Value>,
+    pub beacon_blocks: HashMap<String, serde_json::Value>,
+    pub parent_states_pending: HashMap<String, serde_json::Value>,
+    pub post_states_pending: HashMap<String, serde_json::Value>,
+}
+
 /// Complete machine-readable verification receipt.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerificationReceipt {
@@ -184,6 +195,8 @@ pub struct VerificationReceipt {
     pub summary: VerificationSummary,
     pub fee_exemption: LidoFeeExemptionReport,
     pub pairs: Vec<PairVerificationResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_evidence: Option<RawEvidenceArtifacts>,
 }
 
 #[cfg(test)]

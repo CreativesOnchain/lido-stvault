@@ -47,12 +47,19 @@ impl VerificationEngine {
             .map(|v| v.receipt.clone())
             .collect();
 
+        let tx_inputs: Vec<String> = el_evidence
+            .verified_txs
+            .values()
+            .filter_map(|v| v.details.as_ref().map(|d| d.input.clone()))
+            .collect();
+
         // Step 4: Audit Lido fee exemption role for derived accounts
         let fee_exemption = LidoRoleInspector::check_fee_exempt_roles(
             el_client,
             st_vault_dashboard,
             &source_credentials,
             &receipts,
+            &tx_inputs,
         )
         .await?;
 
@@ -69,6 +76,35 @@ impl VerificationEngine {
             results.push(pair_result);
         }
 
+        // Step 6: Assemble raw evidence artifacts for archiving
+        let mut raw_beacon_blocks = HashMap::new();
+        for (slot, block) in &cl_evidence.beacon_blocks {
+            if let Ok(val) = serde_json::to_value(block) {
+                raw_beacon_blocks.insert(slot.to_string(), val);
+            }
+        }
+
+        let mut raw_parent_states = HashMap::new();
+        for (id, list) in &cl_evidence.parent_states_pending {
+            if let Ok(val) = serde_json::to_value(list) {
+                raw_parent_states.insert(id.clone(), val);
+            }
+        }
+
+        let mut raw_post_states = HashMap::new();
+        for (id, list) in &cl_evidence.post_states_pending {
+            if let Ok(val) = serde_json::to_value(list) {
+                raw_post_states.insert(id.clone(), val);
+            }
+        }
+
+        let raw_evidence = crate::models::RawEvidenceArtifacts {
+            el_receipts: el_evidence.raw_receipts.clone(),
+            beacon_blocks: raw_beacon_blocks,
+            parent_states_pending: raw_parent_states,
+            post_states_pending: raw_post_states,
+        };
+
         Ok(VerificationReceipt {
             tool_version: env!("CARGO_PKG_VERSION").to_string(),
             timestamp: Utc::now(),
@@ -77,6 +113,7 @@ impl VerificationEngine {
             summary,
             fee_exemption,
             pairs: results,
+            raw_evidence: Some(raw_evidence),
         })
     }
 }

@@ -1,7 +1,8 @@
 [package]
 name = "stvault-receipt"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
+rust-version = "1.85"
 authors = ["Creatives Onchain", "Lido stVault Contributors"]
 description = "CLI tool and library that verifies the post-submission status of Lido stVault validator consolidation requests across Ethereum execution and consensus layers using exact block-level state delta proofs."
 license = "MIT OR Apache-2.0"

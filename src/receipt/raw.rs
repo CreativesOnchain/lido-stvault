@@ -69,6 +69,40 @@ impl EvidenceWriter {
         let meta_json = serde_json::to_string_pretty(&meta)?;
         write_file(evidence_dir.join("verification_metadata.json"), &meta_json)?;
 
+        // 5. Write Individual Raw Evidence Files
+        if let Some(ref raw) = receipt.raw_evidence {
+            for (tx_hash, val) in &raw.el_receipts {
+                let clean_hash = tx_hash.trim().trim_start_matches("0x");
+                let file_name = format!("el_receipt_0x{}.json", clean_hash);
+                if let Ok(content) = serde_json::to_string_pretty(val) {
+                    let _ = write_file(evidence_dir.join(file_name), &content);
+                }
+            }
+
+            for (slot, val) in &raw.beacon_blocks {
+                let file_name = format!("beacon_block_{}.json", slot);
+                if let Ok(content) = serde_json::to_string_pretty(val) {
+                    let _ = write_file(evidence_dir.join(file_name), &content);
+                }
+            }
+
+            for (id, val) in &raw.parent_states_pending {
+                let clean_id = id.trim().trim_start_matches("0x");
+                let file_name = format!("parent_pending_consolidations_{}.json", clean_id);
+                if let Ok(content) = serde_json::to_string_pretty(val) {
+                    let _ = write_file(evidence_dir.join(file_name), &content);
+                }
+            }
+
+            for (id, val) in &raw.post_states_pending {
+                let clean_id = id.trim().trim_start_matches("0x");
+                let file_name = format!("post_pending_consolidations_{}.json", clean_id);
+                if let Ok(content) = serde_json::to_string_pretty(val) {
+                    let _ = write_file(evidence_dir.join(file_name), &content);
+                }
+            }
+        }
+
         Ok(())
     }
 }
@@ -131,6 +165,7 @@ mod tests {
                 details: "OK".to_string(),
                 indeterminate_reason: None,
             }],
+            raw_evidence: None,
         };
 
         let res = EvidenceWriter::save_all(

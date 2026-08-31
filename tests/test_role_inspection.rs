@@ -34,6 +34,7 @@ async fn test_lido_fee_exempt_role_active() {
         Some(dashboard_addr),
         &source_credentials,
         &[],
+        &[],
     )
     .await
     .expect("should check role");
@@ -72,10 +73,42 @@ async fn test_lido_fee_exempt_role_inactive() {
         Some(dashboard_addr),
         &source_credentials,
         &[],
+        &[],
     )
     .await
     .expect("should check role");
 
     assert!(!report.is_any_role_active());
     assert!(report.notes.contains("NOT active"));
+}
+
+#[tokio::test]
+async fn test_lido_fee_exempt_role_rpc_failure_returns_indeterminate() {
+    let el_server = MockServer::start().await;
+
+    // eth_call returns HTTP 500 error
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&el_server)
+        .await;
+
+    let el_client = ElClient::new(el_server.uri());
+    let dashboard_addr = "0x1234567890123456789012345678901234567890";
+    let pubkey = "0x8a9233f81e69b07ef94dd6d9dfd7ab6c7e112d7c07dd5aa9e8a83d3e8e2e92c48858e37ab7b3117562ad846ef3294ee1";
+    let creds = "0x01000000000000000000000070997970C51812dc3A010C7d01b50e0d17dc79C8";
+
+    let mut source_credentials = HashMap::new();
+    source_credentials.insert(pubkey.to_string(), Some(creds.to_string()));
+
+    let report = LidoRoleInspector::check_fee_exempt_roles(
+        &el_client,
+        Some(dashboard_addr),
+        &source_credentials,
+        &[],
+        &[],
+    )
+    .await
+    .expect("should complete with error note");
+
+    assert!(report.notes.contains("INDETERMINATE"));
 }

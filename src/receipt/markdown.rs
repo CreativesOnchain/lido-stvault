@@ -282,6 +282,7 @@ mod tests {
                 details: "Verified in queue".to_string(),
                 indeterminate_reason: None,
             }],
+            raw_evidence: None,
         };
 
         let md = generate_markdown_receipt(&receipt);

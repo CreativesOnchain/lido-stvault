@@ -1,5 +1,5 @@
 {
-  "tool_version": "0.2.0",
+  "tool_version": "0.3.0",
   "timestamp": "2026-08-28T12:00:00Z",
   "el_rpc_url": "https://rpc.hoodi.ethpandaops.io",
   "cl_beacon_url": "https://bn.hoodi.ethpandaops.io",

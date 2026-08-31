@@ -36,17 +36,15 @@ pub struct ValidatorsResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConsolidationRequestItem {
-    #[serde(
-        alias = "source_pubkey",
-        alias = "sourcePubkey",
-        alias = "source_address"
-    )]
+    #[serde(alias = "source_address", alias = "sourceAddress", default)]
+    pub source_address: Option<String>,
+    #[serde(alias = "source_pubkey", alias = "sourcePubkey", default)]
     pub source_pubkey: Option<String>,
-    #[serde(alias = "target_pubkey", alias = "targetPubkey")]
+    #[serde(alias = "target_pubkey", alias = "targetPubkey", default)]
     pub target_pubkey: Option<String>,
-    #[serde(alias = "source_index", alias = "sourceIndex")]
+    #[serde(alias = "source_index", alias = "sourceIndex", default)]
     pub source_index: Option<String>,
-    #[serde(alias = "target_index", alias = "targetIndex")]
+    #[serde(alias = "target_index", alias = "targetIndex", default)]
     pub target_index: Option<String>,
 }
 

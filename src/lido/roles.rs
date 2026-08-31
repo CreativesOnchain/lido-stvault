@@ -27,11 +27,13 @@ impl LidoRoleInspector {
         contract_address: Option<&str>,
         source_credentials: &HashMap<String, Option<String>>,
         receipts: &[TxReceipt],
+        tx_inputs: &[String],
     ) -> Result<LidoFeeExemptionReport> {
         let role_hash = lido_fee_exempt_role_hash();
         let role_name = LIDO_FEE_EXEMPT_ROLE_NAME.to_string();
 
-        let fee_exemption_observed = detect_fee_exemption_events(contract_address, receipts);
+        let fee_exemption_observed =
+            detect_fee_exemption_calls(contract_address, receipts, tx_inputs);
 
         let Some(contract) = contract_address.map(str::trim).filter(|s| !s.is_empty()) else {
             let audited_sources = source_credentials
@@ -60,8 +62,10 @@ impl LidoRoleInspector {
         };
 
         // Cache role lookups per derived address to avoid redundant RPC calls
-        let mut address_role_cache: HashMap<String, Option<bool>> = HashMap::new();
+        let mut address_role_cache: HashMap<String, std::result::Result<bool, String>> =
+            HashMap::new();
         let mut audited_sources = Vec::with_capacity(source_credentials.len());
+        let mut had_rpc_error = false;
 
         for (pubkey, creds) in source_credentials {
             let derived = creds
@@ -69,12 +73,26 @@ impl LidoRoleInspector {
                 .and_then(crate::cl::verifier::derive_address_from_credentials);
 
             let role_active = if let Some(ref addr) = derived {
-                if let Some(&cached) = address_role_cache.get(addr) {
-                    cached
+                if let Some(cached) = address_role_cache.get(addr) {
+                    match cached {
+                        Ok(active) => Some(*active),
+                        Err(_) => {
+                            had_rpc_error = true;
+                            None
+                        }
+                    }
                 } else {
-                    let is_active = query_has_role(el_client, contract, &role_hash, addr).await;
-                    address_role_cache.insert(addr.clone(), is_active);
-                    is_active
+                    match query_has_role(el_client, contract, &role_hash, addr).await {
+                        Ok(is_active) => {
+                            address_role_cache.insert(addr.clone(), Ok(is_active));
+                            Some(is_active)
+                        }
+                        Err(e) => {
+                            address_role_cache.insert(addr.clone(), Err(e.to_string()));
+                            had_rpc_error = true;
+                            None
+                        }
+                    }
                 }
             } else {
                 None
@@ -90,7 +108,9 @@ impl LidoRoleInspector {
 
         let any_active = audited_sources.iter().any(|s| s.role_active == Some(true));
 
-        let notes = if any_active {
+        let notes = if had_rpc_error {
+            "INDETERMINATE: One or more role queries to the stVault Dashboard / ACL contract failed due to RPC or contract call errors."
+        } else if any_active {
             "WARNING: vaults.NodeOperatorFee.FeeExemptRole is currently ACTIVE on one or more source validator accounts. Ensure it is revoked after consolidation workflow completes."
         } else {
             "vaults.NodeOperatorFee.FeeExemptRole is NOT active on audited source validator accounts (revoked or never granted)."
@@ -117,13 +137,10 @@ async fn query_has_role(
     contract: &str,
     role_hash: &str,
     address: &str,
-) -> Option<bool> {
+) -> Result<bool> {
     let calldata = encode_has_role_calldata(role_hash, address);
-    el_client
-        .eth_call(contract, &calldata)
-        .await
-        .ok()
-        .map(|ret| parse_bool_return(&ret))
+    let ret = el_client.eth_call(contract, &calldata).await?;
+    Ok(parse_bool_return(&ret))
 }
 
 /// Encodes ABI calldata for `hasRole(bytes32,address)`:
@@ -153,23 +170,52 @@ pub fn parse_bool_return(output_hex: &str) -> bool {
     clean.trim_start_matches('0') == "1"
 }
 
-/// Checks if any receipt explicitly targeted the Dashboard or emitted fee exemption logs.
-fn detect_fee_exemption_events(dashboard_addr: Option<&str>, receipts: &[TxReceipt]) -> bool {
-    let Some(dashboard) = dashboard_addr else {
-        return false;
-    };
-    let dash_clean = dashboard.trim().to_lowercase();
+/// 4-byte selector for `addFeeExemption(uint256)`
+pub fn add_fee_exemption_selector() -> String {
+    let hash = keccak256(b"addFeeExemption(uint256)");
+    hex::encode(&hash[0..4])
+}
 
-    for receipt in receipts {
-        if receipt.to.as_deref().map(|s| s.to_lowercase()) == Some(dash_clean.clone()) {
+/// Detects explicit `addFeeExemption(uint256)` calls from transaction inputs and receipt logs.
+fn detect_fee_exemption_calls(
+    dashboard_addr: Option<&str>,
+    receipts: &[TxReceipt],
+    tx_inputs: &[String],
+) -> bool {
+    let selector = add_fee_exemption_selector();
+
+    // Check tx inputs for addFeeExemption(uint256) selector
+    for input in tx_inputs {
+        let clean = input
+            .trim()
+            .trim_start_matches("0x")
+            .trim_start_matches("0X");
+        if clean.starts_with(&selector) || clean.contains(&selector) {
             return true;
         }
-        for log in &receipt.logs {
-            if log.address.to_lowercase() == dash_clean {
-                return true;
+    }
+
+    // Check receipt logs for fee exemption events
+    let fee_exemption_event_topic = format!(
+        "0x{}",
+        hex::encode(keccak256(b"FeeExemptionAdded(uint256)"))
+    );
+    if let Some(dashboard) = dashboard_addr {
+        let dash_clean = dashboard.trim().to_lowercase();
+        for receipt in receipts {
+            for log in &receipt.logs {
+                if log.address.to_lowercase() == dash_clean
+                    && log
+                        .topics
+                        .iter()
+                        .any(|t| t.to_lowercase() == fee_exemption_event_topic.to_lowercase())
+                {
+                    return true;
+                }
             }
         }
     }
+
     false
 }
 
